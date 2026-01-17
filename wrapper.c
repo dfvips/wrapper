@@ -204,45 +204,6 @@ static void try_install_tzdata_into_rootfs(const char *rootfs_dir) {
             break;
         }
     }
-    if (!src) {
-#if defined(WRAPPER_EMBED_TZDATA)
-        char dst1[PATH_MAX];
-        char dst2[PATH_MAX];
-        if (!join_path(dst1, sizeof(dst1), rootfs_dir, "/system/usr/share/zoneinfo/tzdata") ||
-            !join_path(dst2, sizeof(dst2), rootfs_dir, "/data/misc/zoneinfo/tzdata")) {
-            if (g_debug) {
-                fprintf(stderr, "[debug] tzdata: rootfs_dir too long\n");
-                fflush(stderr);
-            }
-            return;
-        }
-
-        size_t tz_size = (size_t)(_binary_tzdata_end - _binary_tzdata_start);
-        if (tz_size < 8 || memcmp(_binary_tzdata_start, "tzdata", 6) != 0) {
-            if (g_debug) {
-                fprintf(stderr, "[debug] tzdata embedded blob invalid, size=%zu\n", tz_size);
-                fflush(stderr);
-            }
-            return;
-        }
-        if (file_exists(dst1) && !is_valid_tzdata_file(dst1)) unlink(dst1);
-        if (file_exists(dst2) && !is_valid_tzdata_file(dst2)) unlink(dst2);
-        int ok1 = write_blob_if_missing(_binary_tzdata_start, tz_size, dst1, 0644);
-        int ok2 = write_blob_if_missing(_binary_tzdata_start, tz_size, dst2, 0644);
-        if (g_debug) {
-            fprintf(stderr, "[debug] tzdata embedded dst1=%s ok=%d exists=%d\n", dst1, ok1, file_exists(dst1));
-            fprintf(stderr, "[debug] tzdata embedded dst2=%s ok=%d exists=%d\n", dst2, ok2, file_exists(dst2));
-            fflush(stderr);
-        }
-        return;
-#endif
-        if (g_debug) {
-            fprintf(stderr, "[debug] tzdata source not found on host\n");
-            fflush(stderr);
-        }
-        return;
-    }
-
     char dst1[PATH_MAX];
     char dst2[PATH_MAX];
     if (!join_path(dst1, sizeof(dst1), rootfs_dir, "/system/usr/share/zoneinfo/tzdata") ||
@@ -256,11 +217,37 @@ static void try_install_tzdata_into_rootfs(const char *rootfs_dir) {
 
     if (file_exists(dst1) && !is_valid_tzdata_file(dst1)) unlink(dst1);
     if (file_exists(dst2) && !is_valid_tzdata_file(dst2)) unlink(dst2);
+
+    if (!src) {
+#if defined(WRAPPER_EMBED_TZDATA)
+        size_t tz_size = (size_t)(_binary_tzdata_end - _binary_tzdata_start);
+        if (tz_size < 8 || memcmp(_binary_tzdata_start, "tzdata", 6) != 0) {
+            if (g_debug) {
+                fprintf(stderr, "[debug] tzdata embedded blob invalid, size=%zu\n", tz_size);
+                fflush(stderr);
+            }
+            return;
+        }
+        int ok1 = write_blob_if_missing(_binary_tzdata_start, tz_size, dst1, 0644);
+        int ok2 = write_blob_if_missing(_binary_tzdata_start, tz_size, dst2, 0644);
+        if (g_debug) {
+            fprintf(stderr, "[debug] tzdata embedded dst1=%s ok=%d exists=%d valid=%d\n", dst1, ok1, file_exists(dst1), is_valid_tzdata_file(dst1));
+            fprintf(stderr, "[debug] tzdata embedded dst2=%s ok=%d exists=%d valid=%d\n", dst2, ok2, file_exists(dst2), is_valid_tzdata_file(dst2));
+            fflush(stderr);
+        }
+        return;
+#endif
+        if (g_debug) {
+            fprintf(stderr, "[debug] tzdata source not found on host\n");
+            fflush(stderr);
+        }
+        return;
+    }
     int ok1 = copy_file_if_missing(src, dst1, 0644);
     int ok2 = copy_file_if_missing(src, dst2, 0644);
     if (g_debug) {
-        fprintf(stderr, "[debug] tzdata src=%s dst1=%s ok=%d exists=%d\n", src, dst1, ok1, file_exists(dst1));
-        fprintf(stderr, "[debug] tzdata src=%s dst2=%s ok=%d exists=%d\n", src, dst2, ok2, file_exists(dst2));
+        fprintf(stderr, "[debug] tzdata src=%s dst1=%s ok=%d exists=%d valid=%d\n", src, dst1, ok1, file_exists(dst1), is_valid_tzdata_file(dst1));
+        fprintf(stderr, "[debug] tzdata src=%s dst2=%s ok=%d exists=%d valid=%d\n", src, dst2, ok2, file_exists(dst2), is_valid_tzdata_file(dst2));
         fflush(stderr);
     }
 }
