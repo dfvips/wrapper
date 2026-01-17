@@ -32,6 +32,8 @@ int offlineFlag;
 char *device_infos[9];
 static int g_debug = 0;
 static char *g_cookie = NULL;
+static int g_cookie_mode = 0;
+static int g_playback_ready = 0;
 
 char *strcat_b(char *dest, char* src);
 
@@ -152,6 +154,41 @@ static void ensure_nonnull_string(char **s) {
     if (*s == NULL) {
         *s = (char *)"";
     }
+}
+
+static char *extract_cookie_value(const char *cookie, const char *key) {
+    if (!cookie || !key || !key[0]) {
+        return NULL;
+    }
+    size_t key_len = strlen(key);
+    const char *p = cookie;
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == ';') {
+            p++;
+        }
+        if (strncmp(p, key, key_len) == 0 && p[key_len] == '=') {
+            const char *v = p + key_len + 1;
+            const char *end = v;
+            while (*end && *end != ';' && *end != '\r' && *end != '\n') {
+                end++;
+            }
+            size_t len = (size_t)(end - v);
+            char *out = (char *)malloc(len + 1);
+            if (!out) {
+                return NULL;
+            }
+            memcpy(out, v, len);
+            out[len] = '\0';
+            return out;
+        }
+        while (*p && *p != ';') {
+            p++;
+        }
+        if (*p == ';') {
+            p++;
+        }
+    }
+    return NULL;
 }
 
 static void strip_cookie_inplace(char *s) {
@@ -533,6 +570,10 @@ static void *preshareCtx = NULL;
 
 inline static void *getKdContext(const char *const adam,
                                  const char *const uri) {
+    if (!g_playback_ready || FHinstance == NULL) {
+        debugf("playback not ready, reject decrypt request");
+        return NULL;
+    }
     uint8_t isPreshare = (strcmp("0", adam) == 0);
     if (isPreshare && preshareCtx != NULL) {
         return preshareCtx;
@@ -581,6 +622,10 @@ void refresh_decrypt_ctx() {
 }
 
 void handle(const int connfd) {
+    if (!g_playback_ready) {
+        debugf("playback not ready, closing decrypt connection");
+        return;
+    }
     while (1) {
         uint8_t adamSize;
         if (!readfull(connfd, &adamSize, sizeof(uint8_t)))
@@ -771,6 +816,11 @@ const char* get_m3u8_method_play(uint8_t leaseMgr[16], unsigned long adam) {
 }
 
 void handle_m3u8(const int connfd) {
+    if (!g_playback_ready) {
+        debugf("playback not ready, reject m3u8 request");
+        writefull(connfd, "\n", sizeof("\n"));
+        return;
+    }
     while (1)
     {
         uint8_t adamSize;
@@ -1182,6 +1232,20 @@ int main(int argc, char *argv[]) {
     cmdline_parser(argc, argv, &args_info);
     g_debug = args_info.debug_flag ? 1 : 0;
     load_cookie_from_env();
+    if (g_cookie && g_cookie[0]) {
+        char *mut = extract_cookie_value(g_cookie, "media-user-token");
+        if (mut && mut[0]) {
+            g_music_token = mut;
+            g_cookie_mode = 1;
+            debugf("media-user-token extracted");
+        } else {
+            if (mut) {
+                free(mut);
+            }
+            g_cookie_mode = 1;
+            debugf("cookie mode without media-user-token");
+        }
+    }
     char *copy_that_needs_to_be_freed = NULL;
     split_string_safe(args_info.device_info_arg, "/", device_infos, 9, &copy_that_needs_to_be_freed);
 
@@ -1203,38 +1267,47 @@ int main(int argc, char *argv[]) {
             return EXIT_FAILURE;
         }
     }
-    _ZN22SVPlaybackLeaseManagerC2ERKNSt6__ndk18functionIFvRKiEEERKNS1_IFvRKNS0_10shared_ptrIN17storeservicescore19StoreErrorConditionEEEEEE(
-        leaseMgr, &endLeaseCallback, &pbErrCallback);
-    uint8_t autom = 1;
-    _ZN22SVPlaybackLeaseManager25refreshLeaseAutomaticallyERKb(leaseMgr, &autom);
-    _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
-    FHinstance = _ZN21SVFootHillSessionCtrl8instanceEv();
+    if (g_cookie_mode) {
+        ensure_nonnull_string(&g_storefront_id);
+        ensure_nonnull_string(&g_dev_token);
+        ensure_nonnull_string(&g_music_token);
+        fprintf(stderr, "[+] cookie mode: skip playback init, start servers only\n");
+    } else {
+        debugf("init lease manager");
+        _ZN22SVPlaybackLeaseManagerC2ERKNSt6__ndk18functionIFvRKiEEERKNS1_IFvRKNS0_10shared_ptrIN17storeservicescore19StoreErrorConditionEEEEEE(
+            leaseMgr, &endLeaseCallback, &pbErrCallback);
+        uint8_t autom = 1;
+        _ZN22SVPlaybackLeaseManager25refreshLeaseAutomaticallyERKb(leaseMgr, &autom);
+        _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
+        FHinstance = _ZN21SVFootHillSessionCtrl8instanceEv();
+        g_playback_ready = 1;
 
-    offlineFlag = offline_available();
-    if (offlineFlag) {
-        printf("[+] This account supports offline channel\n");
-    }
+        offlineFlag = offline_available();
+        if (offlineFlag) {
+            printf("[+] This account supports offline channel\n");
+        }
 
-    // Cache account info
-    g_storefront_id = get_account_storefront_id(reqCtx);
-    g_dev_token = get_dev_token(reqCtx);
-    g_music_token = get_music_user_token(get_guid(), g_dev_token, reqCtx);
-    ensure_nonnull_string(&g_storefront_id);
-    ensure_nonnull_string(&g_dev_token);
-    ensure_nonnull_string(&g_music_token);
-    if (!g_storefront_id || !g_storefront_id[0]) {
-        debugf("storefront_id empty");
-    }
-    if (!g_dev_token || !g_dev_token[0]) {
-        debugf("dev_token empty");
-    }
-    if (!g_music_token || !g_music_token[0]) {
-        debugf("music_token empty");
-    }
-    fprintf(stderr, "[+] account info cached successfully\n");
+        // Cache account info
+        g_storefront_id = get_account_storefront_id(reqCtx);
+        g_dev_token = get_dev_token(reqCtx);
+        g_music_token = get_music_user_token(get_guid(), g_dev_token, reqCtx);
+        ensure_nonnull_string(&g_storefront_id);
+        ensure_nonnull_string(&g_dev_token);
+        ensure_nonnull_string(&g_music_token);
+        if (!g_storefront_id || !g_storefront_id[0]) {
+            debugf("storefront_id empty");
+        }
+        if (!g_dev_token || !g_dev_token[0]) {
+            debugf("dev_token empty");
+        }
+        if (!g_music_token || !g_music_token[0]) {
+            debugf("music_token empty");
+        }
+        fprintf(stderr, "[+] account info cached successfully\n");
 
-    write_storefront_id();
-    write_music_token();
+        write_storefront_id();
+        write_music_token();
+    }
 
     debugf("starting m3u8 server thread");
     pthread_t m3u8_thread;
