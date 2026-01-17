@@ -1,140 +1,244 @@
 #define _GNU_SOURCE
 
 #include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <string.h>
-#include <limits.h>
 
 #include "cmdline.h"
 
 pid_t child_proc = -1;
 struct gengetopt_args_info args_info;
-#define CAP_SYS_ADMIN_IDX 21
-#define CAP_SYS_ADMIN_BIT (1ULL << CAP_SYS_ADMIN_IDX)
-extern char **environ;
+#if defined(WRAPPER_EMBED_ROOTFS)
+extern const unsigned char _binary_rootfs_tar_start[];
+extern const unsigned char _binary_rootfs_tar_end[];
+#endif
 
-static void normalize_debug_argv(int argc, char **argv) {
-    for (int i = 1; i < argc; i++) {
-        if (argv[i] && strcmp(argv[i], "-debug") == 0) {
-            argv[i] = (char *)"--debug";
-        }
-    }
-}
+static int g_debug = 0;
 
-static void strip_cookie_inplace(char *s) {
-    if (s == NULL) {
+static void debugf(const char *fmt, ...) {
+    if (!g_debug) {
         return;
     }
-    size_t w = 0;
-    for (size_t r = 0; s[r] != '\0'; r++) {
-        if (s[r] == '\n' || s[r] == '\r') {
-            continue;
-        }
-        s[w++] = s[r];
-    }
-    s[w] = '\0';
-    while (w > 0) {
-        char c = s[w - 1];
-        if (c == ' ' || c == '\t') {
-            s[w - 1] = '\0';
-            w--;
-            continue;
-        }
-        break;
-    }
+    va_list args;
+    va_start(args, fmt);
+    fprintf(stderr, "[debug] ");
+    vfprintf(stderr, fmt, args);
+    fprintf(stderr, "\n");
+    va_end(args);
+    fflush(stderr);
 }
 
-static char *read_cookie_from_file(const char *path) {
-    FILE *fp = fopen(path, "rb");
-    if (!fp) {
-        return NULL;
-    }
-    if (fseek(fp, 0, SEEK_END) != 0) {
-        fclose(fp);
-        return NULL;
-    }
-    long size = ftell(fp);
-    if (size <= 0 || size > 256 * 1024) {
-        fclose(fp);
-        return NULL;
-    }
-    if (fseek(fp, 0, SEEK_SET) != 0) {
-        fclose(fp);
-        return NULL;
-    }
-    char *buf = (char *)malloc((size_t)size + 1);
-    if (!buf) {
-        fclose(fp);
-        return NULL;
-    }
-    size_t n = fread(buf, 1, (size_t)size, fp);
-    fclose(fp);
-    if (n == 0) {
-        free(buf);
-        return NULL;
-    }
-    buf[n] = '\0';
-    strip_cookie_inplace(buf);
-    if (buf[0] == '\0') {
-        free(buf);
-        return NULL;
-    }
-    return buf;
+static int file_exists(const char *path) {
+    struct stat st;
+    return stat(path, &st) == 0;
 }
 
-static int try_load_cookie_txt(char **out_cookie_path) {
-    if (out_cookie_path) {
-        *out_cookie_path = NULL;
-    }
-    const char *already = getenv("WRAPPER_COOKIE");
-    if (already && already[0]) {
+static int ensure_dir(const char *path, mode_t mode) {
+    if (mkdir(path, mode) == 0) {
         return 1;
     }
+    if (errno == EEXIST) {
+        return 1;
+    }
+    return 0;
+}
 
-    char exe_path[PATH_MAX + 1];
-    ssize_t exe_len = readlink("/proc/self/exe", exe_path, PATH_MAX);
-    if (exe_len <= 0) {
+static int ensure_parent_dirs(const char *path) {
+    char buf[PATH_MAX];
+    size_t len = strnlen(path, sizeof(buf));
+    if (len == 0 || len >= sizeof(buf)) {
         return 0;
     }
-    exe_path[exe_len] = '\0';
-    char *last_slash = strrchr(exe_path, '/');
-    if (!last_slash) {
-        return 0;
-    }
-    *last_slash = '\0';
-    size_t dir_len = strlen(exe_path);
-    const char *cookie_name = "/cookie.txt";
-    size_t cookie_len = dir_len + strlen(cookie_name);
-    char *cookie_path = (char *)malloc(cookie_len + 1);
-    if (!cookie_path) {
-        return 0;
-    }
-    memcpy(cookie_path, exe_path, dir_len);
-    memcpy(cookie_path + dir_len, cookie_name, strlen(cookie_name) + 1);
-
-    char *cookie = read_cookie_from_file(cookie_path);
-    if (!cookie) {
-        free(cookie_path);
-        return 0;
-    }
-    setenv("WRAPPER_COOKIE", cookie, 1);
-    free(cookie);
-    if (out_cookie_path) {
-        *out_cookie_path = cookie_path;
-    } else {
-        free(cookie_path);
+    memcpy(buf, path, len + 1);
+    for (char *p = buf + 1; *p; ++p) {
+        if (*p == '/') {
+            *p = '\0';
+            if (!ensure_dir(buf, 0755)) {
+                return 0;
+            }
+            *p = '/';
+        }
     }
     return 1;
 }
 
+static unsigned long parse_octal(const char *s, size_t n) {
+    unsigned long v = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (s[i] == '\0') break;
+        if (s[i] < '0' || s[i] > '7') continue;
+        v = (v << 3) + (unsigned long)(s[i] - '0');
+    }
+    return v;
+}
+
+static int should_skip_extract_path(const char *rel_path) {
+    if (strncmp(rel_path, "./", 2) == 0) {
+        rel_path += 2;
+    }
+    if (strncmp(rel_path, "data/", 5) == 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int extract_tar_to_dir(const unsigned char *tar, size_t tar_size, const char *out_dir) {
+    if (!ensure_dir(out_dir, 0755)) {
+        return 0;
+    }
+
+    size_t off = 0;
+    while (off + 512 <= tar_size) {
+        const unsigned char *hdr = tar + off;
+        int all_zero = 1;
+        for (size_t i = 0; i < 512; ++i) {
+            if (hdr[i] != 0) {
+                all_zero = 0;
+                break;
+            }
+        }
+        if (all_zero) {
+            break;
+        }
+
+        char name[101];
+        char prefix[156];
+        memcpy(name, hdr + 0, 100);
+        name[100] = '\0';
+        memcpy(prefix, hdr + 345, 155);
+        prefix[155] = '\0';
+
+        char rel_path[PATH_MAX];
+        if (prefix[0]) {
+            snprintf(rel_path, sizeof(rel_path), "%s/%s", prefix, name);
+        } else {
+            snprintf(rel_path, sizeof(rel_path), "%s", name);
+        }
+
+        char out_path[PATH_MAX];
+        if (snprintf(out_path, sizeof(out_path), "%s/%s", out_dir, rel_path) >= (int)sizeof(out_path)) {
+            return 0;
+        }
+
+        unsigned long mode = parse_octal((const char *)(hdr + 100), 8);
+        unsigned long size = parse_octal((const char *)(hdr + 124), 12);
+        char typeflag = (char)hdr[156];
+
+        off += 512;
+
+        if (rel_path[0] == '\0') {
+            continue;
+        }
+
+        if (typeflag == '5') {
+            if (!ensure_parent_dirs(out_path)) {
+                return 0;
+            }
+            if (!ensure_dir(out_path, (mode_t)(mode ? mode : 0755))) {
+                return 0;
+            }
+            continue;
+        }
+
+        if (typeflag == '2') {
+            char linkname[101];
+            memcpy(linkname, hdr + 157, 100);
+            linkname[100] = '\0';
+            if (!ensure_parent_dirs(out_path)) {
+                return 0;
+            }
+            if (should_skip_extract_path(rel_path) && file_exists(out_path)) {
+                continue;
+            }
+            unlink(out_path);
+            if (symlink(linkname, out_path) != 0) {
+                return 0;
+            }
+            continue;
+        }
+
+        if (!ensure_parent_dirs(out_path)) {
+            return 0;
+        }
+        if (should_skip_extract_path(rel_path) && file_exists(out_path)) {
+            size_t blocks = (size + 511) / 512;
+            off += blocks * 512;
+            continue;
+        }
+
+        int fd = open(out_path, O_CREAT | O_TRUNC | O_WRONLY, (mode_t)(mode ? mode : 0644));
+        if (fd == -1) {
+            return 0;
+        }
+
+        size_t remaining = size;
+        while (remaining > 0) {
+            size_t chunk = remaining > 8192 ? 8192 : remaining;
+            if (off + chunk > tar_size) {
+                close(fd);
+                return 0;
+            }
+            ssize_t wr = write(fd, tar + off, chunk);
+            if (wr <= 0) {
+                close(fd);
+                return 0;
+            }
+            off += (size_t)wr;
+            remaining -= (size_t)wr;
+        }
+        close(fd);
+
+        size_t pad = (512 - (size % 512)) % 512;
+        off += pad;
+    }
+
+    return 1;
+}
+
+static int strip_debug_arg(int argc, char **argv, char ***out_argv) {
+    char **filtered = (char **)calloc((size_t)argc + 1, sizeof(char *));
+    if (!filtered) {
+        return -1;
+    }
+
+    int j = 0;
+    for (int i = 0; i < argc; ++i) {
+        if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-debug") == 0) {
+            g_debug = 1;
+            continue;
+        }
+        filtered[j++] = argv[i];
+    }
+    filtered[j] = NULL;
+    *out_argv = filtered;
+    return j;
+}
+
+static const char *default_rootfs_dir(void) {
+    const char *home = getenv("HOME");
+    if (home && home[0]) {
+        static char p[PATH_MAX];
+        snprintf(p, sizeof(p), "%s/.wrapper/rootfs", home);
+        return p;
+    }
+    return "/tmp/wrapper-rootfs";
+}
+#define CAP_SYS_ADMIN_IDX 21
+#define CAP_SYS_ADMIN_BIT (1ULL << CAP_SYS_ADMIN_IDX)
+
 static void intHan(int signum) {
+    (void)signum;
     if (child_proc != -1) {
         kill(child_proc, SIGKILL);
     }
@@ -177,43 +281,55 @@ int has_cap_sys_admin() {
 }
 
 int main(int argc, char *argv[], char *envp[]) {
-    normalize_debug_argv(argc, argv);
-    cmdline_parser(argc, argv, &args_info);
-    if (signal(SIGINT, intHan) == SIG_ERR) {
-        perror("signal");
+    char **filtered_argv = NULL;
+    int filtered_argc = strip_debug_arg(argc, argv, &filtered_argv);
+    if (filtered_argc < 0) {
+        fprintf(stderr, "[!] out of memory\n");
         return 1;
     }
 
-    char *cookie_path = NULL;
-    int cookie_loaded = try_load_cookie_txt(&cookie_path);
-    if (args_info.debug_flag) {
-        fprintf(stderr, "[debug] wrapper start\n");
-        if (cookie_loaded) {
-            fprintf(stderr, "[debug] cookie loaded: %s\n", cookie_path ? cookie_path : "(env)");
-        } else {
-            fprintf(stderr, "[debug] cookie not found\n");
-        }
-    }
-    if (cookie_path) {
-        free(cookie_path);
+    cmdline_parser(filtered_argc, filtered_argv, &args_info);
+    if (signal(SIGINT, intHan) == SIG_ERR) {
+        perror("signal");
+        free(filtered_argv);
+        return 1;
     }
 
-    if (chdir("./rootfs") != 0) {
+    const char *rootfs_dir = NULL;
+    if (file_exists("./rootfs")) {
+        rootfs_dir = "./rootfs";
+    } else {
+#if defined(WRAPPER_EMBED_ROOTFS)
+        rootfs_dir = default_rootfs_dir();
+        if (!file_exists(rootfs_dir)) {
+            debugf("extracting embedded rootfs to %s", rootfs_dir);
+            if (!extract_tar_to_dir(_binary_rootfs_tar_start,
+                                    (size_t)(_binary_rootfs_tar_end - _binary_rootfs_tar_start),
+                                    rootfs_dir)) {
+                fprintf(stderr, "[!] failed to extract embedded rootfs\n");
+                free(filtered_argv);
+                return 1;
+            }
+        }
+#else
+        fprintf(stderr, "[!] rootfs not found (expected ./rootfs)\n");
+        free(filtered_argv);
+        return 1;
+#endif
+    }
+
+    setenv("WRAPPER_HOST_ROOTFS", rootfs_dir, 1);
+
+    if (chdir(rootfs_dir) != 0) {
         perror("chdir");
+        free(filtered_argv);
         return 1;
     }
     if (chroot("./") != 0) {
         perror("chroot");
+        free(filtered_argv);
         return 1;
     }
-    setenv("ANDROID_DATA", "/data", 1);
-    setenv("ANDROID_ROOT", "/system", 1);
-    setenv("TZ", "UTC0", 1);
-
-    mkdir("/data", 0777);
-    mkdir("/data/misc", 0777);
-    mkdir("/data/misc/zoneinfo", 0777);
-    mkdir("/data/misc/zoneinfo/current", 0777);
     mknod("/dev/urandom", S_IFCHR | 0666, makedev(0x1, 0x9));
     chmod("/system/bin/linker64", 0755);
     chmod("/system/bin/main", 0755);
@@ -221,6 +337,7 @@ int main(int argc, char *argv[], char *envp[]) {
     if (has_cap_sys_admin()) {
         if (unshare(CLONE_NEWPID)) {
             perror("unshare");
+            free(filtered_argv);
             return 1;
         }
     }
@@ -228,28 +345,29 @@ int main(int argc, char *argv[], char *envp[]) {
     child_proc = fork();
     if (child_proc == -1) {
         perror("fork");
+        free(filtered_argv);
         return 1;
     }
 
     if (child_proc > 0) {
         wait(NULL);
+        free(filtered_argv);
         return 0;
     }
 
     // Child process logic
     mkdir(args_info.base_dir_arg, 0777);
-    size_t mpl_db_len = strlen(args_info.base_dir_arg) + strlen("/mpl_db");
-    char *mpl_db_dir = (char *)malloc(mpl_db_len + 1);
-    if (mpl_db_dir) {
-        strcpy(mpl_db_dir, args_info.base_dir_arg);
-        strcat(mpl_db_dir, "/mpl_db");
-        mkdir(mpl_db_dir, 0777);
-        free(mpl_db_dir);
+    {
+        char mpl_db[PATH_MAX];
+        snprintf(mpl_db, sizeof(mpl_db), "%s/mpl_db", args_info.base_dir_arg);
+        mkdir(mpl_db, 0777);
     }
-    if (args_info.debug_flag) {
-        fprintf(stderr, "[debug] exec /system/bin/main\n");
-    }
-    execve("/system/bin/main", argv, environ);
+
+    setenv("ANDROID_DATA", "/data", 1);
+    setenv("ANDROID_ROOT", "/system", 1);
+
+    execve("/system/bin/main", argv, envp);
     perror("execve");
+    free(filtered_argv);
     return 1;
 }

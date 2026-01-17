@@ -36,7 +36,6 @@ const char *gengetopt_args_info_description = "";
 const char *gengetopt_args_info_help[] = {
   "  -h, --help                Print help and exit",
   "  -V, --version             Print version and exit",
-  "  -d, --debug                (default=off)",
   "  -H, --host=STRING           (default=`127.0.0.1')",
   "  -D, --decrypt-port=INT      (default=`10020')",
   "  -M, --m3u8-port=INT         (default=`20020')",
@@ -73,7 +72,6 @@ void clear_given (struct gengetopt_args_info *args_info)
 {
   args_info->help_given = 0 ;
   args_info->version_given = 0 ;
-  args_info->debug_given = 0 ;
   args_info->host_given = 0 ;
   args_info->decrypt_port_given = 0 ;
   args_info->m3u8_port_given = 0 ;
@@ -89,7 +87,6 @@ static
 void clear_args (struct gengetopt_args_info *args_info)
 {
   FIX_UNUSED (args_info);
-  args_info->debug_flag = 0;
   args_info->host_arg = gengetopt_strdup ("127.0.0.1");
   args_info->host_orig = NULL;
   args_info->decrypt_port_arg = 10020;
@@ -117,16 +114,15 @@ void init_args_info(struct gengetopt_args_info *args_info)
 
   args_info->help_help = gengetopt_args_info_help[0] ;
   args_info->version_help = gengetopt_args_info_help[1] ;
-  args_info->debug_help = gengetopt_args_info_help[2] ;
-  args_info->host_help = gengetopt_args_info_help[3] ;
-  args_info->decrypt_port_help = gengetopt_args_info_help[4] ;
-  args_info->m3u8_port_help = gengetopt_args_info_help[5] ;
-  args_info->account_port_help = gengetopt_args_info_help[6] ;
-  args_info->proxy_help = gengetopt_args_info_help[7] ;
-  args_info->login_help = gengetopt_args_info_help[8] ;
-  args_info->code_from_file_help = gengetopt_args_info_help[9] ;
-  args_info->base_dir_help = gengetopt_args_info_help[10] ;
-  args_info->device_info_help = gengetopt_args_info_help[11] ;
+  args_info->host_help = gengetopt_args_info_help[2] ;
+  args_info->decrypt_port_help = gengetopt_args_info_help[3] ;
+  args_info->m3u8_port_help = gengetopt_args_info_help[4] ;
+  args_info->account_port_help = gengetopt_args_info_help[5] ;
+  args_info->proxy_help = gengetopt_args_info_help[6] ;
+  args_info->login_help = gengetopt_args_info_help[7] ;
+  args_info->code_from_file_help = gengetopt_args_info_help[8] ;
+  args_info->base_dir_help = gengetopt_args_info_help[9] ;
+  args_info->device_info_help = gengetopt_args_info_help[10] ;
   
 }
 
@@ -543,7 +539,6 @@ cmdline_parser_internal (
       static struct option long_options[] = {
         { "help",	0, NULL, 'h' },
         { "version",	0, NULL, 'V' },
-        { "debug",	0, NULL, 'd' },
         { "host",	1, NULL, 'H' },
         { "decrypt-port",	1, NULL, 'D' },
         { "m3u8-port",	1, NULL, 'M' },
@@ -556,7 +551,7 @@ cmdline_parser_internal (
         { 0,  0, 0, 0 }
       };
 
-      c = getopt_long (argc, argv, "hVdH:D:M:A:P:L:FB:I:", long_options, &option_index);
+      c = getopt_long (argc, argv, "hVH:D:M:A:P:L:FB:I:", long_options, &option_index);
 
       if (c == -1) break;	/* Exit from `while (1)' loop.  */
 
@@ -572,16 +567,6 @@ cmdline_parser_internal (
           cmdline_parser_free (&local_args_info);
           exit (EXIT_SUCCESS);
 
-        case 'd':	/* .  */
-        
-        
-          if (update_arg((void *)&(args_info->debug_flag), 0, &(args_info->debug_given),
-              &(local_args_info.debug_given), optarg, 0, 0, ARG_FLAG,
-              check_ambiguity, override, 1, 0, "debug", 'd',
-              additional_error))
-            goto failure;
-        
-          break;
         case 'H':	/* .  */
         
         

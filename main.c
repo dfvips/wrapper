@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <termios.h>
+#include <limits.h>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -26,21 +28,32 @@ static uint8_t leaseMgr[16];
 static struct shared_ptr reqCtx;
 struct gengetopt_args_info args_info;
 char *amUsername, *amPassword;
+static char *g_am_username_buf = NULL;
+static char *g_am_password_buf = NULL;
+static size_t g_am_password_cap = 0;
+static int g_debug = 0;
 struct shared_ptr GUID;
 int decryptCount = 1000;
 int offlineFlag;
 char *device_infos[9];
-static int g_debug = 0;
-static char *g_cookie = NULL;
-static int g_cookie_mode = 0;
-static int g_playback_ready = 0;
-
-char *strcat_b(char *dest, char* src);
 
 // Account info cache
 static char *g_storefront_id = NULL;
 static char *g_dev_token = NULL;
 static char *g_music_token = NULL;
+
+static void debugf(const char *fmt, ...) {
+    if (!g_debug) {
+        return;
+    }
+    va_list args;
+    va_start(args, fmt);
+    fprintf(stderr, "[debug] ");
+    vfprintf(stderr, fmt, args);
+    fprintf(stderr, "\n");
+    va_end(args);
+    fflush(stderr);
+}
 
 #ifndef MyRelease
 int32_t CURLOPT_SSL_VERIFYPEER = 64;
@@ -119,134 +132,123 @@ int file_exists(char *filename) {
   return (stat (filename, &buffer) == 0);
 }
 
-static void normalize_debug_argv(int argc, char **argv) {
-    for (int i = 1; i < argc; i++) {
-        if (argv[i] && strcmp(argv[i], "-debug") == 0) {
-            argv[i] = (char *)"--debug";
+static int strip_debug_arg(int argc, char **argv, char ***out_argv) {
+    char **filtered = (char **)calloc((size_t)argc + 1, sizeof(char *));
+    if (!filtered) {
+        return -1;
+    }
+
+    int j = 0;
+    for (int i = 0; i < argc; ++i) {
+        if (strcmp(argv[i], "--debug") == 0 || strcmp(argv[i], "-debug") == 0) {
+            g_debug = 1;
+            continue;
+        }
+        filtered[j++] = argv[i];
+    }
+    filtered[j] = NULL;
+    *out_argv = filtered;
+    return j;
+}
+
+static char *read_line(const char *prompt, int hidden) {
+    if (prompt) {
+        fputs(prompt, stderr);
+        fflush(stderr);
+    }
+
+    struct termios oldt;
+    struct termios newt;
+    int changed = 0;
+    if (hidden && isatty(STDIN_FILENO)) {
+        if (tcgetattr(STDIN_FILENO, &oldt) == 0) {
+            newt = oldt;
+            newt.c_lflag &= (tcflag_t)~ECHO;
+            if (tcsetattr(STDIN_FILENO, TCSANOW, &newt) == 0) {
+                changed = 1;
+            }
         }
     }
-}
 
-static void debugf(const char *fmt, ...) {
-    if (!g_debug) {
-        return;
-    }
-    va_list args;
-    va_start(args, fmt);
-    fprintf(stderr, "[debug] ");
-    vfprintf(stderr, fmt, args);
-    fprintf(stderr, "\n");
-    va_end(args);
-}
-
-static const char *safe_cstr(const char *s) {
-    return s ? s : "";
-}
-
-static void ensure_nonnull_string(char **s) {
-    if (s == NULL) {
-        return;
-    }
-    if (*s != NULL) {
-        return;
-    }
-    *s = strdup("");
-    if (*s == NULL) {
-        *s = (char *)"";
-    }
-}
-
-static char *extract_cookie_value(const char *cookie, const char *key) {
-    if (!cookie || !key || !key[0]) {
+    char buf[512];
+    if (!fgets(buf, sizeof(buf), stdin)) {
+        if (changed) {
+            tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+        }
         return NULL;
     }
-    size_t key_len = strlen(key);
-    const char *p = cookie;
-    while (*p) {
-        while (*p == ' ' || *p == '\t' || *p == ';') {
-            p++;
-        }
-        if (strncmp(p, key, key_len) == 0 && p[key_len] == '=') {
-            const char *v = p + key_len + 1;
-            const char *end = v;
-            while (*end && *end != ';' && *end != '\r' && *end != '\n') {
-                end++;
-            }
-            size_t len = (size_t)(end - v);
-            char *out = (char *)malloc(len + 1);
-            if (!out) {
-                return NULL;
-            }
-            memcpy(out, v, len);
-            out[len] = '\0';
-            return out;
-        }
-        while (*p && *p != ';') {
-            p++;
-        }
-        if (*p == ';') {
-            p++;
-        }
+
+    if (changed) {
+        tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+        fputc('\n', stderr);
+        fflush(stderr);
     }
-    return NULL;
+
+    size_t len = strcspn(buf, "\r\n");
+    buf[len] = '\0';
+    return strdup(buf);
 }
 
-static void strip_cookie_inplace(char *s) {
-    if (s == NULL) {
-        return;
+static int set_credentials(const char *username, const char *password) {
+    free(g_am_username_buf);
+    free(g_am_password_buf);
+    g_am_username_buf = NULL;
+    g_am_password_buf = NULL;
+    g_am_password_cap = 0;
+
+    if (!username || !username[0] || !password) {
+        return 0;
     }
-    size_t w = 0;
-    for (size_t r = 0; s[r] != '\0'; r++) {
-        if (s[r] == '\n' || s[r] == '\r') {
-            continue;
-        }
-        s[w++] = s[r];
+
+    g_am_username_buf = strdup(username);
+    if (!g_am_username_buf) {
+        return 0;
     }
-    s[w] = '\0';
-    while (w > 0) {
-        char c = s[w - 1];
-        if (c == ' ' || c == '\t') {
-            s[w - 1] = '\0';
-            w--;
-            continue;
-        }
-        break;
+
+    size_t pass_len = strlen(password);
+    size_t cap = pass_len + 32;
+    if (cap < 128) cap = 128;
+    g_am_password_buf = (char *)calloc(cap, 1);
+    if (!g_am_password_buf) {
+        free(g_am_username_buf);
+        g_am_username_buf = NULL;
+        return 0;
     }
+    memcpy(g_am_password_buf, password, pass_len);
+    g_am_password_cap = cap;
+
+    amUsername = g_am_username_buf;
+    amPassword = g_am_password_buf;
+    return 1;
 }
 
-static void load_cookie_from_env(void) {
-    const char *env_cookie = getenv("WRAPPER_COOKIE");
-    if (!env_cookie || !env_cookie[0]) {
-        return;
+static int ensure_credentials_from_args_or_prompt(int force_prompt) {
+    if (!force_prompt && args_info.login_given && args_info.login_arg) {
+        char *login_copy = strdup(args_info.login_arg);
+        if (!login_copy) {
+            return 0;
+        }
+        char *user = strtok(login_copy, ":");
+        char *pass = strtok(NULL, ":");
+        int ok = set_credentials(user, pass ? pass : "");
+        free(login_copy);
+        return ok;
     }
-    g_cookie = strdup(env_cookie);
-    if (!g_cookie) {
-        return;
-    }
-    strip_cookie_inplace(g_cookie);
-    if (!g_cookie[0]) {
-        free(g_cookie);
-        g_cookie = NULL;
-        return;
-    }
-    debugf("cookie enabled");
-}
 
-static void invalidate_cached_account_files(void) {
-    char *storefront_path = strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID");
-    if (storefront_path && file_exists(storefront_path)) {
-        remove(storefront_path);
+    char *user = read_line("username: ", 0);
+    if (!user) {
+        return 0;
     }
-    if (storefront_path) {
-        free(storefront_path);
+    char *pass = read_line("password: ", 1);
+    if (!pass) {
+        free(user);
+        return 0;
     }
-    char *music_token_path = strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN");
-    if (music_token_path && file_exists(music_token_path)) {
-        remove(music_token_path);
-    }
-    if (music_token_path) {
-        free(music_token_path);
-    }
+
+    int ok = set_credentials(user, pass);
+    free(user);
+    free(pass);
+    return ok;
 }
 
 char *strcat_b(char *dest, char* src) {
@@ -343,12 +345,18 @@ static void credentialHandler(struct shared_ptr *credReqHandler,
             credReqHandler->obj)),
         need2FA ? "true" : "false");
 
-    int passLen = strlen(amPassword);
+    size_t passLen = strlen(amPassword);
 
     if (need2FA) {
         if (args_info.code_from_file_flag) {
-            fprintf(stderr, "[!] Enter your 2FA code into rootfs/%s/2fa.txt\n", args_info.base_dir_arg);
-            fprintf(stderr, "[!] Example command: echo -n 114514 > rootfs/%s/2fa.txt\n", args_info.base_dir_arg);
+            const char *host_rootfs = getenv("WRAPPER_HOST_ROOTFS");
+            if (host_rootfs && host_rootfs[0]) {
+                fprintf(stderr, "[!] Enter your 2FA code into %s%s/2fa.txt\n", host_rootfs, args_info.base_dir_arg);
+                fprintf(stderr, "[!] Example command: echo -n 114514 > %s%s/2fa.txt\n", host_rootfs, args_info.base_dir_arg);
+            } else {
+                fprintf(stderr, "[!] Enter your 2FA code into rootfs/%s/2fa.txt\n", args_info.base_dir_arg);
+                fprintf(stderr, "[!] Example command: echo -n 114514 > rootfs/%s/2fa.txt\n", args_info.base_dir_arg);
+            }
             fprintf(stderr, "[!] Waiting for input...\n");
             int count = 0;
             while (1)
@@ -357,12 +365,24 @@ static void credentialHandler(struct shared_ptr *credReqHandler,
                     fprintf(stderr, "[!] Failed to get 2FA Code in 60s. Exiting...\n");
                     exit(0);
                 }
-                char *path = strcat_b(args_info.base_dir_arg, "/2fa.txt");
+                char path[PATH_MAX];
+                snprintf(path, sizeof(path), "%s/2fa.txt", args_info.base_dir_arg);
                 if (file_exists(path)) {
                     FILE *fp = fopen(path, "r");
-                    fscanf(fp, "%6s", amPassword + passLen);
+                    char code[16] = {0};
+                    if (fp) {
+                        fscanf(fp, "%6s", code);
+                        fclose(fp);
+                    }
                     remove(path);
                     fprintf(stderr, "[!] Code file detected! Logging in...\n");
+                    size_t codeLen = strlen(code);
+                    if (passLen + codeLen + 1 > g_am_password_cap) {
+                        fprintf(stderr, "[!] password buffer too small\n");
+                        exit(0);
+                    }
+                    memcpy(amPassword + passLen, code, codeLen);
+                    amPassword[passLen + codeLen] = '\0';
                     break;
                 } else {
                     sleep(3);
@@ -370,8 +390,19 @@ static void credentialHandler(struct shared_ptr *credReqHandler,
                 }
             }
         } else {
-            printf("2FA code: ");
-            scanf("%6s", amPassword + passLen);
+            char *code = read_line("2FA code: ", 0);
+            if (!code) {
+                exit(0);
+            }
+            size_t codeLen = strlen(code);
+            if (passLen + codeLen + 1 > g_am_password_cap) {
+                free(code);
+                fprintf(stderr, "[!] password buffer too small\n");
+                exit(0);
+            }
+            memcpy(amPassword + passLen, code, codeLen);
+            amPassword[passLen + codeLen] = '\0';
+            free(code);
         }
     }
 
@@ -409,7 +440,6 @@ static inline void init() {
     fprintf(stderr, "[+] starting...\n");
     setenv("ANDROID_DATA", "/data", 1);
     setenv("ANDROID_ROOT", "/system", 1);
-    setenv("TZ", "UTC0", 1);
     setenv("ANDROID_DNS_MODE", "local", 1);
     if (args_info.proxy_given) {
         fprintf(stderr, "[+] Using proxy %s\n", args_info.proxy_arg);
@@ -517,7 +547,12 @@ extern void *pbErrCallback;
 
 inline static uint8_t login(struct shared_ptr reqCtx) {
     fprintf(stderr, "[+] logging in...\n");
-    invalidate_cached_account_files();
+    if (file_exists(strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID"))) {
+        remove(strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID"));
+    }
+    if (file_exists(strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN"))) {
+        remove(strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN"));
+    }
     struct shared_ptr flow;
     _ZNSt6__ndk110shared_ptrIN17storeservicescore16AuthenticateFlowEE11make_sharedIJRNS0_INS1_14RequestContextEEEEEES3_DpOT_(
         &flow, &reqCtx);
@@ -570,10 +605,6 @@ static void *preshareCtx = NULL;
 
 inline static void *getKdContext(const char *const adam,
                                  const char *const uri) {
-    if (!g_playback_ready || FHinstance == NULL) {
-        debugf("playback not ready, reject decrypt request");
-        return NULL;
-    }
     uint8_t isPreshare = (strcmp("0", adam) == 0);
     if (isPreshare && preshareCtx != NULL) {
         return preshareCtx;
@@ -622,10 +653,6 @@ void refresh_decrypt_ctx() {
 }
 
 void handle(const int connfd) {
-    if (!g_playback_ready) {
-        debugf("playback not ready, closing decrypt connection");
-        return;
-    }
     while (1) {
         uint8_t adamSize;
         if (!readfull(connfd, &adamSize, sizeof(uint8_t)))
@@ -816,11 +843,6 @@ const char* get_m3u8_method_play(uint8_t leaseMgr[16], unsigned long adam) {
 }
 
 void handle_m3u8(const int connfd) {
-    if (!g_playback_ready) {
-        debugf("playback not ready, reject m3u8 request");
-        writefull(connfd, "\n", sizeof("\n"));
-        return;
-    }
     while (1)
     {
         uint8_t adamSize;
@@ -932,7 +954,7 @@ void handle_account(const int connfd)
     }
 
     snprintf(json_body, json_size, "{\"storefront_id\":\"%s\",\"dev_token\":\"%s\",\"music_token\":\"%s\"}",
-             safe_cstr(g_storefront_id), safe_cstr(g_dev_token), safe_cstr(g_music_token));
+             g_storefront_id, g_dev_token, g_music_token);
 
     int json_len = strlen(json_body);
 
@@ -951,7 +973,7 @@ void handle_account(const int connfd)
     snprintf(http_response, response_size, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
              json_len);
 
-    fprintf(stderr, "[.] returning account info, storefront: %s\n", safe_cstr(g_storefront_id));
+    fprintf(stderr, "[.] returning account info, storefront: %s\n", g_storefront_id);
     writefull(connfd, http_response, strlen(http_response));
     writefull(connfd, json_body, json_len);
 
@@ -1021,27 +1043,13 @@ char* get_account_storefront_id(struct shared_ptr reqCtx) {
         char *result = strdup(region_str); 
         free(region);
         return result;
-    }
-    free(region);
+    } 
     return NULL;
 }
 
 void write_storefront_id(void) {
-    ensure_nonnull_string(&g_storefront_id);
-    printf("[+] StoreFront ID: %s\n", safe_cstr(g_storefront_id));
-    if (!g_storefront_id[0]) {
-        debugf("storefront_id empty, skip writing file");
-        return;
-    }
-    char *path = strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID");
-    if (!path) {
-        return;
-    }
-    FILE *fp = fopen(path, "w");
-    free(path);
-    if (!fp) {
-        return;
-    }
+    FILE *fp = fopen(strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID"), "w");
+    printf("[+] StoreFront ID: %s\n", g_storefront_id);
     fprintf(fp, "%s", g_storefront_id);
     fclose(fp);
 }
@@ -1081,11 +1089,6 @@ char *get_music_user_token(char *guid, char *authToken, struct shared_ptr reqCtx
     union std_string bundleVersionHeader = new_std_string("X-Apple-Requesting-Bundle-Version");
     union std_string bundleVersionValue = new_std_string("Music/4.9 Android/10 model/Samsung S9 build/7663313 (dt:66)");
     _ZN13mediaplatform11HTTPMessage9setHeaderERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_(httpMessage.obj, &bundleVersionHeader, &bundleVersionValue);
-    if (g_cookie && g_cookie[0]) {
-        union std_string cookieHeader = new_std_string("Cookie");
-        union std_string cookieValue = new_std_string(g_cookie);
-        _ZN13mediaplatform11HTTPMessage9setHeaderERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_(httpMessage.obj, &cookieHeader, &cookieValue);
-    }
     size_t body_size = 512;
     char *body = (char *)malloc(body_size);
     if (body == NULL) {
@@ -1101,7 +1104,6 @@ char *get_music_user_token(char *guid, char *authToken, struct shared_ptr reqCtx
     _ZN17storeservicescore10URLRequest3runEv(urlRequest);
     struct shared_ptr *err = _ZNK17storeservicescore10URLRequest5errorEv(urlRequest);
     if (err->obj != NULL) {
-        debugf("createMusicToken request error");
         return "";
     }
     struct shared_ptr *urlResp = _ZNK17storeservicescore10URLRequest8responseEv(urlRequest);
@@ -1111,16 +1113,8 @@ char *get_music_user_token(char *guid, char *authToken, struct shared_ptr reqCtx
     void* data_ptr = *data_ptr_location;
     char *respBody = _ZNK13mediaplatform4Data5bytesEv(data_ptr);
     cJSON *json = cJSON_Parse(respBody);
-    if (!json) {
-        debugf("createMusicToken response json parse failed");
-        return "";
-    }
     cJSON *token_obj = cJSON_GetObjectItemCaseSensitive(json, "music_token");
     char *token = cJSON_GetStringValue(token_obj);
-    if (!token) {
-        debugf("createMusicToken response missing music_token");
-        return "";
-    }
     char *result = strdup(token);
     return result;
 }
@@ -1135,11 +1129,6 @@ char* get_dev_token(struct shared_ptr reqCtx) {
     union std_string url = new_std_string("https://sf-api-token-service.itunes.apple.com/apiToken");
     union std_string method = new_std_string("GET");
     _ZN13mediaplatform11HTTPMessageC2ENSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES7_(httpMessage.obj, &url, &method);
-    if (g_cookie && g_cookie[0]) {
-        union std_string cookieHeader = new_std_string("Cookie");
-        union std_string cookieValue = new_std_string(g_cookie);
-        _ZN13mediaplatform11HTTPMessage9setHeaderERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_(httpMessage.obj, &cookieHeader, &cookieValue);
-    }
     uint8_t urlRequest[512];
     _ZN17storeservicescore10URLRequestC2ERKNSt6__ndk110shared_ptrIN13mediaplatform11HTTPMessageEEERKNS2_INS_14RequestContextEEE(urlRequest, &httpMessage, &reqCtx);
     union std_string clientIdName = new_std_string("clientId");
@@ -1151,7 +1140,6 @@ char* get_dev_token(struct shared_ptr reqCtx) {
     _ZN17storeservicescore10URLRequest3runEv(urlRequest);
     struct shared_ptr *err = _ZNK17storeservicescore10URLRequest5errorEv(urlRequest);
     if (err->obj != NULL) {
-        debugf("apiToken request error");
         return "";
     }
     struct shared_ptr *urlResp = _ZNK17storeservicescore10URLRequest8responseEv(urlRequest);
@@ -1161,16 +1149,8 @@ char* get_dev_token(struct shared_ptr reqCtx) {
     void* data_ptr = *data_ptr_location;
     char *respBody = _ZNK13mediaplatform4Data5bytesEv(data_ptr);
     cJSON *json = cJSON_Parse(respBody);
-    if (!json) {
-        debugf("apiToken response json parse failed");
-        return "";
-    }
     cJSON *token_obj = cJSON_GetObjectItemCaseSensitive(json, "token");
     char *token = cJSON_GetStringValue(token_obj);
-    if (!token) {
-        debugf("apiToken response missing token");
-        return "";
-    }
     char *result = strdup(token);
     return result;
 }
@@ -1195,21 +1175,8 @@ void write_music_token(void) {
         printf("[+] Music-Token: %.14s...\n", token);
         return;
     }
-    ensure_nonnull_string(&g_music_token);
-    printf("[+] Music-Token: %.14s...\n", safe_cstr(g_music_token));
-    if (!g_music_token[0]) {
-        debugf("music_token empty, skip writing file");
-        return;
-    }
-    char *path = strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN");
-    if (!path) {
-        return;
-    }
-    FILE *fp = fopen(path, "w");
-    free(path);
-    if (!fp) {
-        return;
-    }
+    FILE *fp = fopen(strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN"), "w");
+    printf("[+] Music-Token: %.14s...\n", g_music_token);
     fprintf(fp, "%s", g_music_token);
     fclose(fp);
 }
@@ -1228,97 +1195,87 @@ int offline_available() {
 }
 
 int main(int argc, char *argv[]) {
-    normalize_debug_argv(argc, argv);
-    cmdline_parser(argc, argv, &args_info);
-    g_debug = args_info.debug_flag ? 1 : 0;
-    load_cookie_from_env();
-    if (g_cookie && g_cookie[0]) {
-        char *mut = extract_cookie_value(g_cookie, "media-user-token");
-        if (mut && mut[0]) {
-            g_music_token = mut;
-            g_cookie_mode = 1;
-            debugf("media-user-token extracted");
-        } else {
-            if (mut) {
-                free(mut);
-            }
-            g_cookie_mode = 1;
-            debugf("cookie mode without media-user-token");
-        }
+    char **filtered_argv = NULL;
+    int filtered_argc = strip_debug_arg(argc, argv, &filtered_argv);
+    if (filtered_argc < 0) {
+        fprintf(stderr, "[!] out of memory\n");
+        return EXIT_FAILURE;
     }
+
+    cmdline_parser(filtered_argc, filtered_argv, &args_info);
     char *copy_that_needs_to_be_freed = NULL;
     split_string_safe(args_info.device_info_arg, "/", device_infos, 9, &copy_that_needs_to_be_freed);
 
-    debugf("args parsed");
+    #ifndef MyRelease
+    subhook_install(subhook_new(_ZN13mediaplatform26DebugLogEnabledForPriorityENS_11LogPriorityE, allDebug, SUBHOOK_64BIT_OFFSET));
+    curl_hook = subhook_new(curl_easy_setopt, curl_easy_setopt_hook, SUBHOOK_64BIT_OFFSET);
+    subhook_install(curl_hook);
+    subhook_install(subhook_new(__android_log_print, android_log_print_hook, SUBHOOK_64BIT_OFFSET));
+    subhook_install(subhook_new(__android_log_write, android_log_write_hook, SUBHOOK_64BIT_OFFSET));
+    #endif
+
     init();
-    debugf("init done");
     reqCtx = init_ctx();
-    debugf("ctx init done");
-    if (args_info.login_given && !(g_cookie && g_cookie[0])) {
-        amUsername = strtok(args_info.login_arg, ":");
-        amPassword = strtok(NULL, ":");
+
+    if (!ensure_credentials_from_args_or_prompt(0)) {
+        fprintf(stderr, "[!] failed to read credentials\n");
+        free(filtered_argv);
+        return EXIT_FAILURE;
     }
-    if (g_cookie && g_cookie[0]) {
-        fprintf(stderr, "[+] using cookie.txt login\n");
-        invalidate_cached_account_files();
-    } else if (args_info.login_given) {
-        if (!login(reqCtx)) {
-            fprintf(stderr, "[!] login failed\n");
+
+    int attempts = 0;
+    while (!login(reqCtx)) {
+        attempts++;
+        fprintf(stderr, "[!] login failed\n");
+        if (attempts >= 3) {
+            free(filtered_argv);
+            return EXIT_FAILURE;
+        }
+        fprintf(stderr, "[!] please try again\n");
+        if (!ensure_credentials_from_args_or_prompt(1)) {
+            free(filtered_argv);
             return EXIT_FAILURE;
         }
     }
-    if (g_cookie_mode) {
-        ensure_nonnull_string(&g_storefront_id);
-        ensure_nonnull_string(&g_dev_token);
-        ensure_nonnull_string(&g_music_token);
-        fprintf(stderr, "[+] cookie mode: skip playback init, start servers only\n");
-    } else {
-        debugf("init lease manager");
-        _ZN22SVPlaybackLeaseManagerC2ERKNSt6__ndk18functionIFvRKiEEERKNS1_IFvRKNS0_10shared_ptrIN17storeservicescore19StoreErrorConditionEEEEEE(
-            leaseMgr, &endLeaseCallback, &pbErrCallback);
-        uint8_t autom = 1;
-        _ZN22SVPlaybackLeaseManager25refreshLeaseAutomaticallyERKb(leaseMgr, &autom);
-        _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
-        FHinstance = _ZN21SVFootHillSessionCtrl8instanceEv();
-        g_playback_ready = 1;
+    debugf("login succeeded");
+    _ZN22SVPlaybackLeaseManagerC2ERKNSt6__ndk18functionIFvRKiEEERKNS1_IFvRKNS0_10shared_ptrIN17storeservicescore19StoreErrorConditionEEEEEE(
+        leaseMgr, &endLeaseCallback, &pbErrCallback);
+    uint8_t autom = 1;
+    _ZN22SVPlaybackLeaseManager25refreshLeaseAutomaticallyERKb(leaseMgr, &autom);
+    _ZN22SVPlaybackLeaseManager12requestLeaseERKb(leaseMgr, &autom);
+    FHinstance = _ZN21SVFootHillSessionCtrl8instanceEv();
 
-        offlineFlag = offline_available();
-        if (offlineFlag) {
-            printf("[+] This account supports offline channel\n");
-        }
-
-        // Cache account info
-        g_storefront_id = get_account_storefront_id(reqCtx);
-        g_dev_token = get_dev_token(reqCtx);
-        g_music_token = get_music_user_token(get_guid(), g_dev_token, reqCtx);
-        ensure_nonnull_string(&g_storefront_id);
-        ensure_nonnull_string(&g_dev_token);
-        ensure_nonnull_string(&g_music_token);
-        if (!g_storefront_id || !g_storefront_id[0]) {
-            debugf("storefront_id empty");
-        }
-        if (!g_dev_token || !g_dev_token[0]) {
-            debugf("dev_token empty");
-        }
-        if (!g_music_token || !g_music_token[0]) {
-            debugf("music_token empty");
-        }
-        fprintf(stderr, "[+] account info cached successfully\n");
-
-        write_storefront_id();
-        write_music_token();
+    offlineFlag = offline_available();
+    if (offlineFlag) {
+        printf("[+] This account supports offline channel\n");
     }
 
-    debugf("starting m3u8 server thread");
+    // Cache account info
+    g_storefront_id = get_account_storefront_id(reqCtx);
+    g_dev_token = get_dev_token(reqCtx);
+    g_music_token = get_music_user_token(get_guid(), g_dev_token, reqCtx);
+    fprintf(stderr, "[+] account info cached successfully\n");
+
+    write_storefront_id();
+    write_music_token();
+
     pthread_t m3u8_thread;
+    if (g_debug) {
+        fprintf(stderr, "[debug] starting m3u8 server thread\n");
+    }
     pthread_create(&m3u8_thread, NULL, &new_socket_m3u8, NULL);
     pthread_detach(m3u8_thread);
 
-    debugf("starting account server thread");
     pthread_t account_thread;
+    if (g_debug) {
+        fprintf(stderr, "[debug] starting account server thread\n");
+    }
     pthread_create(&account_thread, NULL, &new_socket_account, NULL);
     pthread_detach(account_thread);
 
-    debugf("starting decrypt server loop");
+    if (g_debug) {
+        fprintf(stderr, "[debug] starting decrypt server loop\n");
+    }
+    free(filtered_argv);
     return new_socket();
 }

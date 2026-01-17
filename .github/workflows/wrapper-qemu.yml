@@ -1,68 +1,49 @@
 name: wrapper-qemu
 
 on:
-  workflow_dispatch:
-    inputs:
-      run_id:
-        description: "Build 工作流 run_id（留空则自动取最近一次成功的 Build）"
-        required: false
-        default: ""
+   workflow_dispatch:
+     inputs:
+       run_id:
+         description: "Build workflow run_id to download artifact from"
+         required: true
+         type: string
 
 jobs:
-  on-success:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+   on-success:
+     runs-on: ubuntu-latest
+     steps:
+       - uses: actions/checkout@v4
 
-      - name: Download wrapper-qemu basic image
-        run: wget https://github.com/WorldObservationLog/wrapper/releases/download/wrapper-qemu/wrapper.qcow2
+       - name: Download wrapper-qemu basic image
+         run: wget https://github.com/WorldObservationLog/wrapper/releases/download/wrapper-qemu/wrapper.qcow2
 
-      - name: Mount image
-        run: |
-          sudo apt-get install -y qemu-utils
-          sudo modprobe nbd max_part=8
-          sudo qemu-nbd --connect=/dev/nbd0 wrapper.qcow2
-          sudo mkdir /mnt/wrapper
-          sudo mount /dev/nbd0p3 /mnt/wrapper/
+       - name: Mount image
+         run: |
+           sudo apt-get install -y qemu-utils
+           sudo modprobe nbd max_part=8
+           sudo qemu-nbd --connect=/dev/nbd0 wrapper.qcow2
+           sudo mkdir /mnt/wrapper
+           sudo mount /dev/nbd0p3 /mnt/wrapper/
 
-      - name: Resolve Build run_id
-        id: resolve
-        run: |
-          set -eu
-          if [ -n "${{ inputs.run_id }}" ]; then
-            echo "run_id=${{ inputs.run_id }}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          RUN_ID="$(curl -fsSL \
-            -H "Authorization: Bearer ${{ github.token }}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/build.yml/runs?status=success&per_page=1" \
-            | jq -r '.workflow_runs[0].id')"
-          if [ "$RUN_ID" = "null" ] || [ -z "$RUN_ID" ]; then
-            echo "failed to resolve latest successful Build run_id"
-            exit 1
-          fi
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-
-      - name: Download latest artifact
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          github_token: ${{ github.token }}
-          run_id: ${{ steps.resolve.outputs.run_id }}
+       - name: Download latest artifact
+         uses: dawidd6/action-download-artifact@v6
+         with:
+            github_token: ${{secrets.ACTION_TOKEN}}
+            run_id: ${{ inputs.run_id }}
       
-      - name: Copy wrapper to image
-        run: |
-          mv Wrapper.x86_64.* wrapper
-          sudo mv wrapper /mnt/wrapper/root/wrapper
-          sudo chmod +x /mnt/wrapper/root/wrapper/wrapper
+       - name: Copy wrapper to image
+         run: |
+           mv Wrapper.x86_64.* wrapper
+           sudo mv wrapper /mnt/wrapper/root/wrapper
+           sudo chmod +x /mnt/wrapper/root/wrapper/wrapper
            
-      - name: Unmount image
-        run: |
-          sudo umount /mnt/wrapper/
-          sudo qemu-nbd --disconnect /dev/nbd0
+       - name: Unmount image
+         run: |
+           sudo umount /mnt/wrapper/
+           sudo qemu-nbd --disconnect /dev/nbd0
       
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: wrapper-qemu
-          path: wrapper.qcow2
+       - name: Upload artifact
+         uses: actions/upload-artifact@v4
+         with:
+           name: wrapper-qemu
+           path: wrapper.qcow2
