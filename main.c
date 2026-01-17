@@ -30,6 +30,8 @@ struct shared_ptr GUID;
 int decryptCount = 1000;
 int offlineFlag;
 char *device_infos[9];
+static int g_debug = 0;
+static char *g_cookie = NULL;
 
 // Account info cache
 static char *g_storefront_id = NULL;
@@ -111,6 +113,78 @@ void DumpHex(const void* data, size_t size) {
 int file_exists(char *filename) {
   struct stat buffer;   
   return (stat (filename, &buffer) == 0);
+}
+
+static void normalize_debug_argv(int argc, char **argv) {
+    for (int i = 1; i < argc; i++) {
+        if (argv[i] && strcmp(argv[i], "-debug") == 0) {
+            argv[i] = (char *)"--debug";
+        }
+    }
+}
+
+static void debugf(const char *fmt, ...) {
+    if (!g_debug) {
+        return;
+    }
+    va_list args;
+    va_start(args, fmt);
+    fprintf(stderr, "[debug] ");
+    vfprintf(stderr, fmt, args);
+    fprintf(stderr, "\n");
+    va_end(args);
+}
+
+static void strip_cookie_inplace(char *s) {
+    if (s == NULL) {
+        return;
+    }
+    size_t w = 0;
+    for (size_t r = 0; s[r] != '\0'; r++) {
+        if (s[r] == '\n' || s[r] == '\r') {
+            continue;
+        }
+        s[w++] = s[r];
+    }
+    s[w] = '\0';
+    while (w > 0) {
+        char c = s[w - 1];
+        if (c == ' ' || c == '\t') {
+            s[w - 1] = '\0';
+            w--;
+            continue;
+        }
+        break;
+    }
+}
+
+static void load_cookie_from_env(void) {
+    const char *env_cookie = getenv("WRAPPER_COOKIE");
+    if (!env_cookie || !env_cookie[0]) {
+        return;
+    }
+    g_cookie = strdup(env_cookie);
+    if (!g_cookie) {
+        return;
+    }
+    strip_cookie_inplace(g_cookie);
+    if (!g_cookie[0]) {
+        free(g_cookie);
+        g_cookie = NULL;
+        return;
+    }
+    debugf("cookie enabled");
+}
+
+static void invalidate_cached_account_files(void) {
+    char *storefront_path = strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID");
+    if (storefront_path && file_exists(storefront_path)) {
+        remove(storefront_path);
+    }
+    char *music_token_path = strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN");
+    if (music_token_path && file_exists(music_token_path)) {
+        remove(music_token_path);
+    }
 }
 
 char *strcat_b(char *dest, char* src) {
@@ -271,6 +345,8 @@ static inline void init() {
 
     // raise(SIGSTOP);
     fprintf(stderr, "[+] starting...\n");
+    setenv("ANDROID_DATA", "/data", 1);
+    setenv("ANDROID_ROOT", "/system", 1);
     setenv("ANDROID_DNS_MODE", "local", 1);
     if (args_info.proxy_given) {
         fprintf(stderr, "[+] Using proxy %s\n", args_info.proxy_arg);
@@ -378,12 +454,7 @@ extern void *pbErrCallback;
 
 inline static uint8_t login(struct shared_ptr reqCtx) {
     fprintf(stderr, "[+] logging in...\n");
-    if (file_exists(strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID"))) {
-        remove(strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID"));
-    }
-    if (file_exists(strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN"))) {
-        remove(strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN"));
-    }
+    invalidate_cached_account_files();
     struct shared_ptr flow;
     _ZNSt6__ndk110shared_ptrIN17storeservicescore16AuthenticateFlowEE11make_sharedIJRNS0_INS1_14RequestContextEEEEEES3_DpOT_(
         &flow, &reqCtx);
@@ -920,6 +991,11 @@ char *get_music_user_token(char *guid, char *authToken, struct shared_ptr reqCtx
     union std_string bundleVersionHeader = new_std_string("X-Apple-Requesting-Bundle-Version");
     union std_string bundleVersionValue = new_std_string("Music/4.9 Android/10 model/Samsung S9 build/7663313 (dt:66)");
     _ZN13mediaplatform11HTTPMessage9setHeaderERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_(httpMessage.obj, &bundleVersionHeader, &bundleVersionValue);
+    if (g_cookie && g_cookie[0]) {
+        union std_string cookieHeader = new_std_string("Cookie");
+        union std_string cookieValue = new_std_string(g_cookie);
+        _ZN13mediaplatform11HTTPMessage9setHeaderERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_(httpMessage.obj, &cookieHeader, &cookieValue);
+    }
     size_t body_size = 512;
     char *body = (char *)malloc(body_size);
     if (body == NULL) {
@@ -935,6 +1011,7 @@ char *get_music_user_token(char *guid, char *authToken, struct shared_ptr reqCtx
     _ZN17storeservicescore10URLRequest3runEv(urlRequest);
     struct shared_ptr *err = _ZNK17storeservicescore10URLRequest5errorEv(urlRequest);
     if (err->obj != NULL) {
+        debugf("createMusicToken request error");
         return "";
     }
     struct shared_ptr *urlResp = _ZNK17storeservicescore10URLRequest8responseEv(urlRequest);
@@ -944,8 +1021,16 @@ char *get_music_user_token(char *guid, char *authToken, struct shared_ptr reqCtx
     void* data_ptr = *data_ptr_location;
     char *respBody = _ZNK13mediaplatform4Data5bytesEv(data_ptr);
     cJSON *json = cJSON_Parse(respBody);
+    if (!json) {
+        debugf("createMusicToken response json parse failed");
+        return "";
+    }
     cJSON *token_obj = cJSON_GetObjectItemCaseSensitive(json, "music_token");
     char *token = cJSON_GetStringValue(token_obj);
+    if (!token) {
+        debugf("createMusicToken response missing music_token");
+        return "";
+    }
     char *result = strdup(token);
     return result;
 }
@@ -960,6 +1045,11 @@ char* get_dev_token(struct shared_ptr reqCtx) {
     union std_string url = new_std_string("https://sf-api-token-service.itunes.apple.com/apiToken");
     union std_string method = new_std_string("GET");
     _ZN13mediaplatform11HTTPMessageC2ENSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES7_(httpMessage.obj, &url, &method);
+    if (g_cookie && g_cookie[0]) {
+        union std_string cookieHeader = new_std_string("Cookie");
+        union std_string cookieValue = new_std_string(g_cookie);
+        _ZN13mediaplatform11HTTPMessage9setHeaderERKNSt6__ndk112basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_(httpMessage.obj, &cookieHeader, &cookieValue);
+    }
     uint8_t urlRequest[512];
     _ZN17storeservicescore10URLRequestC2ERKNSt6__ndk110shared_ptrIN13mediaplatform11HTTPMessageEEERKNS2_INS_14RequestContextEEE(urlRequest, &httpMessage, &reqCtx);
     union std_string clientIdName = new_std_string("clientId");
@@ -971,6 +1061,7 @@ char* get_dev_token(struct shared_ptr reqCtx) {
     _ZN17storeservicescore10URLRequest3runEv(urlRequest);
     struct shared_ptr *err = _ZNK17storeservicescore10URLRequest5errorEv(urlRequest);
     if (err->obj != NULL) {
+        debugf("apiToken request error");
         return "";
     }
     struct shared_ptr *urlResp = _ZNK17storeservicescore10URLRequest8responseEv(urlRequest);
@@ -980,8 +1071,16 @@ char* get_dev_token(struct shared_ptr reqCtx) {
     void* data_ptr = *data_ptr_location;
     char *respBody = _ZNK13mediaplatform4Data5bytesEv(data_ptr);
     cJSON *json = cJSON_Parse(respBody);
+    if (!json) {
+        debugf("apiToken response json parse failed");
+        return "";
+    }
     cJSON *token_obj = cJSON_GetObjectItemCaseSensitive(json, "token");
     char *token = cJSON_GetStringValue(token_obj);
+    if (!token) {
+        debugf("apiToken response missing token");
+        return "";
+    }
     char *result = strdup(token);
     return result;
 }
@@ -1026,27 +1125,30 @@ int offline_available() {
 }
 
 int main(int argc, char *argv[]) {
+    normalize_debug_argv(argc, argv);
     cmdline_parser(argc, argv, &args_info);
+    g_debug = args_info.debug_flag ? 1 : 0;
+    load_cookie_from_env();
     char *copy_that_needs_to_be_freed = NULL;
     split_string_safe(args_info.device_info_arg, "/", device_infos, 9, &copy_that_needs_to_be_freed);
 
-    #ifndef MyRelease
-    subhook_install(subhook_new(_ZN13mediaplatform26DebugLogEnabledForPriorityENS_11LogPriorityE, allDebug, SUBHOOK_64BIT_OFFSET));
-    curl_hook = subhook_new(curl_easy_setopt, curl_easy_setopt_hook, SUBHOOK_64BIT_OFFSET);
-    subhook_install(curl_hook);
-    subhook_install(subhook_new(__android_log_print, android_log_print_hook, SUBHOOK_64BIT_OFFSET));
-    subhook_install(subhook_new(__android_log_write, android_log_write_hook, SUBHOOK_64BIT_OFFSET));
-    #endif
-
+    debugf("args parsed");
     init();
+    debugf("init done");
     reqCtx = init_ctx();
-    if (args_info.login_given) {
+    debugf("ctx init done");
+    if (args_info.login_given && !(g_cookie && g_cookie[0])) {
         amUsername = strtok(args_info.login_arg, ":");
         amPassword = strtok(NULL, ":");
     }
-    if (args_info.login_given && !login(reqCtx)) {
-        fprintf(stderr, "[!] login failed\n");
-        return EXIT_FAILURE;
+    if (g_cookie && g_cookie[0]) {
+        fprintf(stderr, "[+] using cookie.txt login\n");
+        invalidate_cached_account_files();
+    } else if (args_info.login_given) {
+        if (!login(reqCtx)) {
+            fprintf(stderr, "[!] login failed\n");
+            return EXIT_FAILURE;
+        }
     }
     _ZN22SVPlaybackLeaseManagerC2ERKNSt6__ndk18functionIFvRKiEEERKNS1_IFvRKNS0_10shared_ptrIN17storeservicescore19StoreErrorConditionEEEEEE(
         leaseMgr, &endLeaseCallback, &pbErrCallback);
@@ -1064,6 +1166,15 @@ int main(int argc, char *argv[]) {
     g_storefront_id = get_account_storefront_id(reqCtx);
     g_dev_token = get_dev_token(reqCtx);
     g_music_token = get_music_user_token(get_guid(), g_dev_token, reqCtx);
+    if (!g_storefront_id || !g_storefront_id[0]) {
+        debugf("storefront_id empty");
+    }
+    if (!g_dev_token || !g_dev_token[0]) {
+        debugf("dev_token empty");
+    }
+    if (!g_music_token || !g_music_token[0]) {
+        debugf("music_token empty");
+    }
     fprintf(stderr, "[+] account info cached successfully\n");
 
     write_storefront_id();

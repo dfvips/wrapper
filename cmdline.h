@@ -39,6 +39,8 @@ struct gengetopt_args_info
 {
   const char *help_help; /**< @brief Print help and exit help description.  */
   const char *version_help; /**< @brief Print version and exit help description.  */
+  int debug_flag;	/**< @brief  (default=off).  */
+  const char *debug_help; /**< @brief  help description.  */
   char * host_arg;	/**< @brief  (default='127.0.0.1').  */
   char * host_orig;	/**< @brief  original value given at command line.  */
   const char *host_help; /**< @brief  help description.  */
@@ -68,6 +70,7 @@ struct gengetopt_args_info
   
   unsigned int help_given ;	/**< @brief Whether help was given.  */
   unsigned int version_given ;	/**< @brief Whether version was given.  */
+  unsigned int debug_given ;	/**< @brief Whether debug was given.  */
   unsigned int host_given ;	/**< @brief Whether host was given.  */
   unsigned int decrypt_port_given ;	/**< @brief Whether decrypt-port was given.  */
   unsigned int m3u8_port_given ;	/**< @brief Whether m3u8-port was given.  */
