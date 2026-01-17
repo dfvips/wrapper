@@ -44,22 +44,14 @@ jobs:
         run: |
           TZDATA_PATH="/usr/share/zoneinfo/tzdata"
           if [ ! -f "$TZDATA_PATH" ]; then
-            TZDATA_PATH="$(find "$HOME/android-ndk-r23b" -type f -path '*/usr/share/zoneinfo/tzdata' | head -n 1)"
+            echo "tzdata not found at $TZDATA_PATH"
+            exit 1
           fi
-          if [ -z "$TZDATA_PATH" ] || [ ! -f "$TZDATA_PATH" ]; then
-            TZDATA_PATH="$(find "$HOME/android-ndk-r23b" -type f -name 'tzdata' | head -n 1)"
-          fi
-          if [ -n "$TZDATA_PATH" ] && [ -f "$TZDATA_PATH" ]; then
-            cp "$TZDATA_PATH" tzdata
-          else
-            : > tzdata
-          fi
+          cp "$TZDATA_PATH" tzdata
           mkdir -p rootfs/system/usr/share/zoneinfo
           mkdir -p rootfs/data/misc/zoneinfo
-          if [ -s tzdata ]; then
-            cp tzdata rootfs/system/usr/share/zoneinfo/tzdata
-            cp tzdata rootfs/data/misc/zoneinfo/tzdata
-          fi
+          cp tzdata rootfs/system/usr/share/zoneinfo/tzdata
+          cp tzdata rootfs/data/misc/zoneinfo/tzdata
           ld -r -b binary tzdata -o tzdata.o
 
       - name: Build singlefile wrapper (static, embeds rootfs)

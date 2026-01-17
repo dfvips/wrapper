@@ -222,15 +222,16 @@ static int set_credentials(const char *username, const char *password) {
     amUsername = g_am_username_buf;
     amPassword = g_am_password_buf;
     if (g_debug) {
-        fprintf(stderr, "[debug] received username=[%s] password=[%s] pass_len=%zu cap=%zu\n",
-                amUsername, amPassword, strlen(amPassword), g_am_password_cap);
+        fprintf(stderr, "[debug] received username=[%s] pass_len=%zu cap=%zu\n",
+                amUsername, strlen(amPassword), g_am_password_cap);
         fflush(stderr);
     }
     return 1;
 }
 
 static int ensure_credentials_from_args_or_prompt(int force_prompt) {
-    if (!force_prompt && args_info.login_given && args_info.login_arg) {
+    (void)force_prompt;
+    if (args_info.login_given && args_info.login_arg) {
         char *login_copy = strdup(args_info.login_arg);
         if (!login_copy) {
             return 0;
@@ -241,25 +242,8 @@ static int ensure_credentials_from_args_or_prompt(int force_prompt) {
         free(login_copy);
         return ok;
     }
-
-    char *user = read_line("username: ", 0);
-    if (!user) {
-        return 0;
-    }
-    char *pass = read_line("password: ", 0);
-    if (!pass) {
-        free(user);
-        return 0;
-    }
-
-    fprintf(stderr, "[.] received credentials: username=[%s] password=[%s] pass_len=%zu\n",
-            user, pass, strlen(pass));
-    fflush(stderr);
-
-    int ok = set_credentials(user, pass);
-    free(user);
-    free(pass);
-    return ok;
+    fprintf(stderr, "[!] missing credentials, please pass -L username:password\n");
+    return 0;
 }
 
 char *strcat_b(char *dest, char* src) {

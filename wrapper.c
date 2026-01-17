@@ -169,6 +169,27 @@ static int write_blob_if_missing(const unsigned char *data, size_t size, const c
     return 1;
 }
 
+static int is_valid_tzdata_file(const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        return 0;
+    }
+    if (st.st_size < 8) {
+        return 0;
+    }
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+    char hdr[6];
+    ssize_t rd = read(fd, hdr, sizeof(hdr));
+    close(fd);
+    if (rd != (ssize_t)sizeof(hdr)) {
+        return 0;
+    }
+    return memcmp(hdr, "tzdata", 6) == 0;
+}
+
 static void try_install_tzdata_into_rootfs(const char *rootfs_dir) {
     const char *candidates[] = {
         "/usr/share/zoneinfo/tzdata",
@@ -197,6 +218,15 @@ static void try_install_tzdata_into_rootfs(const char *rootfs_dir) {
         }
 
         size_t tz_size = (size_t)(_binary_tzdata_end - _binary_tzdata_start);
+        if (tz_size < 8 || memcmp(_binary_tzdata_start, "tzdata", 6) != 0) {
+            if (g_debug) {
+                fprintf(stderr, "[debug] tzdata embedded blob invalid, size=%zu\n", tz_size);
+                fflush(stderr);
+            }
+            return;
+        }
+        if (file_exists(dst1) && !is_valid_tzdata_file(dst1)) unlink(dst1);
+        if (file_exists(dst2) && !is_valid_tzdata_file(dst2)) unlink(dst2);
         int ok1 = write_blob_if_missing(_binary_tzdata_start, tz_size, dst1, 0644);
         int ok2 = write_blob_if_missing(_binary_tzdata_start, tz_size, dst2, 0644);
         if (g_debug) {
@@ -224,6 +254,8 @@ static void try_install_tzdata_into_rootfs(const char *rootfs_dir) {
         return;
     }
 
+    if (file_exists(dst1) && !is_valid_tzdata_file(dst1)) unlink(dst1);
+    if (file_exists(dst2) && !is_valid_tzdata_file(dst2)) unlink(dst2);
     int ok1 = copy_file_if_missing(src, dst1, 0644);
     int ok2 = copy_file_if_missing(src, dst2, 0644);
     if (g_debug) {
