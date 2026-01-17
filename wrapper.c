@@ -170,6 +170,9 @@ static int should_skip_extract_path(const char *rel_path) {
 }
 
 static int extract_tar_to_dir(const unsigned char *tar, size_t tar_size, const char *out_dir) {
+    if (!ensure_parent_dirs(out_dir)) {
+        return 0;
+    }
     if (!ensure_dir(out_dir, 0755)) {
         return 0;
     }
