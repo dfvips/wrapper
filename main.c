@@ -137,6 +137,23 @@ static void debugf(const char *fmt, ...) {
     va_end(args);
 }
 
+static const char *safe_cstr(const char *s) {
+    return s ? s : "";
+}
+
+static void ensure_nonnull_string(char **s) {
+    if (s == NULL) {
+        return;
+    }
+    if (*s != NULL) {
+        return;
+    }
+    *s = strdup("");
+    if (*s == NULL) {
+        *s = (char *)"";
+    }
+}
+
 static void strip_cookie_inplace(char *s) {
     if (s == NULL) {
         return;
@@ -865,7 +882,7 @@ void handle_account(const int connfd)
     }
 
     snprintf(json_body, json_size, "{\"storefront_id\":\"%s\",\"dev_token\":\"%s\",\"music_token\":\"%s\"}",
-             g_storefront_id, g_dev_token, g_music_token);
+             safe_cstr(g_storefront_id), safe_cstr(g_dev_token), safe_cstr(g_music_token));
 
     int json_len = strlen(json_body);
 
@@ -884,7 +901,7 @@ void handle_account(const int connfd)
     snprintf(http_response, response_size, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
              json_len);
 
-    fprintf(stderr, "[.] returning account info, storefront: %s\n", g_storefront_id);
+    fprintf(stderr, "[.] returning account info, storefront: %s\n", safe_cstr(g_storefront_id));
     writefull(connfd, http_response, strlen(http_response));
     writefull(connfd, json_body, json_len);
 
@@ -954,13 +971,27 @@ char* get_account_storefront_id(struct shared_ptr reqCtx) {
         char *result = strdup(region_str); 
         free(region);
         return result;
-    } 
+    }
+    free(region);
     return NULL;
 }
 
 void write_storefront_id(void) {
-    FILE *fp = fopen(strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID"), "w");
-    printf("[+] StoreFront ID: %s\n", g_storefront_id);
+    ensure_nonnull_string(&g_storefront_id);
+    printf("[+] StoreFront ID: %s\n", safe_cstr(g_storefront_id));
+    if (!g_storefront_id[0]) {
+        debugf("storefront_id empty, skip writing file");
+        return;
+    }
+    char *path = strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID");
+    if (!path) {
+        return;
+    }
+    FILE *fp = fopen(path, "w");
+    free(path);
+    if (!fp) {
+        return;
+    }
     fprintf(fp, "%s", g_storefront_id);
     fclose(fp);
 }
@@ -1114,8 +1145,21 @@ void write_music_token(void) {
         printf("[+] Music-Token: %.14s...\n", token);
         return;
     }
-    FILE *fp = fopen(strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN"), "w");
-    printf("[+] Music-Token: %.14s...\n", g_music_token);
+    ensure_nonnull_string(&g_music_token);
+    printf("[+] Music-Token: %.14s...\n", safe_cstr(g_music_token));
+    if (!g_music_token[0]) {
+        debugf("music_token empty, skip writing file");
+        return;
+    }
+    char *path = strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN");
+    if (!path) {
+        return;
+    }
+    FILE *fp = fopen(path, "w");
+    free(path);
+    if (!fp) {
+        return;
+    }
     fprintf(fp, "%s", g_music_token);
     fclose(fp);
 }
@@ -1175,6 +1219,9 @@ int main(int argc, char *argv[]) {
     g_storefront_id = get_account_storefront_id(reqCtx);
     g_dev_token = get_dev_token(reqCtx);
     g_music_token = get_music_user_token(get_guid(), g_dev_token, reqCtx);
+    ensure_nonnull_string(&g_storefront_id);
+    ensure_nonnull_string(&g_dev_token);
+    ensure_nonnull_string(&g_music_token);
     if (!g_storefront_id || !g_storefront_id[0]) {
         debugf("storefront_id empty");
     }
@@ -1189,13 +1236,16 @@ int main(int argc, char *argv[]) {
     write_storefront_id();
     write_music_token();
 
+    debugf("starting m3u8 server thread");
     pthread_t m3u8_thread;
     pthread_create(&m3u8_thread, NULL, &new_socket_m3u8, NULL);
     pthread_detach(m3u8_thread);
 
+    debugf("starting account server thread");
     pthread_t account_thread;
     pthread_create(&account_thread, NULL, &new_socket_account, NULL);
     pthread_detach(account_thread);
 
+    debugf("starting decrypt server loop");
     return new_socket();
 }
