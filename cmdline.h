@@ -59,6 +59,8 @@ struct gengetopt_args_info
   const char *login_help; /**< @brief username:password help description.  */
   int code_from_file_flag;	/**< @brief  (default=off).  */
   const char *code_from_file_help; /**< @brief  help description.  */
+  int debug_flag;	/**< @brief  (default=off).  */
+  const char *debug_help; /**< @brief  help description.  */
   char * base_dir_arg;	/**< @brief  (default='/data/data/com.apple.android.music/files').  */
   char * base_dir_orig;	/**< @brief  original value given at command line.  */
   const char *base_dir_help; /**< @brief  help description.  */
@@ -75,6 +77,7 @@ struct gengetopt_args_info
   unsigned int proxy_given ;	/**< @brief Whether proxy was given.  */
   unsigned int login_given ;	/**< @brief Whether login was given.  */
   unsigned int code_from_file_given ;	/**< @brief Whether code-from-file was given.  */
+  unsigned int debug_given ;	/**< @brief Whether debug was given.  */
   unsigned int base_dir_given ;	/**< @brief Whether base-dir was given.  */
   unsigned int device_info_given ;	/**< @brief Whether device-info was given.  */
 

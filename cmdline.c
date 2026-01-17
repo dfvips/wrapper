@@ -43,6 +43,7 @@ const char *gengetopt_args_info_help[] = {
   "  -P, --proxy=STRING          (default=`')",
   "  -L, --login=STRING        username:password",
   "  -F, --code-from-file        (default=off)",
+  "  -g, --debug                (default=off)",
   "  -B, --base-dir=STRING     \n                              (default=`/data/data/com.apple.android.music/files')",
   "  -I, --device-info=STRING  \n                              ClientIdentifier/VersionIdentifier/PlatformIdentifier/ProductVersion/DeviceModel/BuildVersion/LocaleIdentifier/LanguageIdentifier/AndroidID\n                              (default=`Music/4.9/Android/10/Samsung\n                              S9/7663313/en-US/en-US/dc28071e981c439e')",
     0
@@ -79,6 +80,7 @@ void clear_given (struct gengetopt_args_info *args_info)
   args_info->proxy_given = 0 ;
   args_info->login_given = 0 ;
   args_info->code_from_file_given = 0 ;
+  args_info->debug_given = 0 ;
   args_info->base_dir_given = 0 ;
   args_info->device_info_given = 0 ;
 }
@@ -100,6 +102,7 @@ void clear_args (struct gengetopt_args_info *args_info)
   args_info->login_arg = NULL;
   args_info->login_orig = NULL;
   args_info->code_from_file_flag = 0;
+  args_info->debug_flag = 0;
   args_info->base_dir_arg = gengetopt_strdup ("/data/data/com.apple.android.music/files");
   args_info->base_dir_orig = NULL;
   args_info->device_info_arg = gengetopt_strdup ("Music/4.9/Android/10/Samsung S9/7663313/en-US/en-US/dc28071e981c439e");
@@ -121,8 +124,9 @@ void init_args_info(struct gengetopt_args_info *args_info)
   args_info->proxy_help = gengetopt_args_info_help[6] ;
   args_info->login_help = gengetopt_args_info_help[7] ;
   args_info->code_from_file_help = gengetopt_args_info_help[8] ;
-  args_info->base_dir_help = gengetopt_args_info_help[9] ;
-  args_info->device_info_help = gengetopt_args_info_help[10] ;
+  args_info->debug_help = gengetopt_args_info_help[9] ;
+  args_info->base_dir_help = gengetopt_args_info_help[10] ;
+  args_info->device_info_help = gengetopt_args_info_help[11] ;
   
 }
 
@@ -273,6 +277,8 @@ cmdline_parser_dump(FILE *outfile, struct gengetopt_args_info *args_info)
     write_into_file(outfile, "login", args_info->login_orig, 0);
   if (args_info->code_from_file_given)
     write_into_file(outfile, "code-from-file", 0, 0 );
+  if (args_info->debug_given)
+    write_into_file(outfile, "debug", 0, 0 );
   if (args_info->base_dir_given)
     write_into_file(outfile, "base-dir", args_info->base_dir_orig, 0);
   if (args_info->device_info_given)
@@ -546,12 +552,13 @@ cmdline_parser_internal (
         { "proxy",	1, NULL, 'P' },
         { "login",	1, NULL, 'L' },
         { "code-from-file",	0, NULL, 'F' },
+        { "debug",	0, NULL, 'g' },
         { "base-dir",	1, NULL, 'B' },
         { "device-info",	1, NULL, 'I' },
         { 0,  0, 0, 0 }
       };
 
-      c = getopt_long (argc, argv, "hVH:D:M:A:P:L:FB:I:", long_options, &option_index);
+      c = getopt_long (argc, argv, "hVH:D:M:A:P:L:FgB:I:", long_options, &option_index);
 
       if (c == -1) break;	/* Exit from `while (1)' loop.  */
 
@@ -645,6 +652,16 @@ cmdline_parser_internal (
           if (update_arg((void *)&(args_info->code_from_file_flag), 0, &(args_info->code_from_file_given),
               &(local_args_info.code_from_file_given), optarg, 0, 0, ARG_FLAG,
               check_ambiguity, override, 1, 0, "code-from-file", 'F',
+              additional_error))
+            goto failure;
+        
+          break;
+        case 'g':	/* .  */
+        
+        
+          if (update_arg((void *)&(args_info->debug_flag), 0, &(args_info->debug_given),
+              &(local_args_info.debug_given), optarg, 0, 0, ARG_FLAG,
+              check_ambiguity, override, 1, 0, "debug", 'g',
               additional_error))
             goto failure;
         

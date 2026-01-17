@@ -291,6 +291,9 @@ int main(int argc, char *argv[], char *envp[]) {
     }
 
     cmdline_parser(filtered_argc, filtered_argv, &args_info);
+    if (args_info.debug_flag) {
+        g_debug = 1;
+    }
     if (signal(SIGINT, intHan) == SIG_ERR) {
         perror("signal");
         free(filtered_argv);
