@@ -1,6 +1,10 @@
 name: Build Singlefile
 
 on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -26,6 +30,21 @@ jobs:
           cd build
           cmake ..
           make
+
+      - name: Download Android tzdata into rootfs
+        run: |
+          set -eu
+          mkdir -p rootfs/system/usr/share/zoneinfo
+          for BRANCH in main master; do
+            URL="https://android.googlesource.com/platform/system/timezone/+/refs/heads/${BRANCH}/output_data/tzdata?format=TEXT"
+            if curl -fsSL "$URL" | base64 -d > rootfs/system/usr/share/zoneinfo/tzdata; then
+              if [ -s rootfs/system/usr/share/zoneinfo/tzdata ]; then
+                exit 0
+              fi
+            fi
+          done
+          echo "failed to download Android tzdata"
+          exit 1
 
       - name: Set outputs
         id: vars
@@ -62,4 +81,3 @@ jobs:
         with:
           name: WrapperSingle.x86_64.${{ steps.vars.outputs.sha_short }}
           path: WrapperSingle.x86_64.${{ steps.vars.outputs.sha_short }}.run
-

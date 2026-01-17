@@ -1,10 +1,7 @@
 name: Build
 
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -58,4 +55,3 @@ jobs:
         tag_name: Wrapper.x86_64.${{ steps.vars.outputs.sha_short }}
         make_latest: true
         
-

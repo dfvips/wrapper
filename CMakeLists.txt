@@ -32,12 +32,14 @@ set_target_properties(main PROPERTIES
 
 set(TZDATA_SOURCE "${TOOLCHAIN}/sysroot/usr/share/zoneinfo/tzdata")
 set(TZDATA_DEST_DIR "${CMAKE_SOURCE_DIR}/rootfs/system/usr/share/zoneinfo")
-add_custom_command(
-    TARGET main
-    POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${TZDATA_DEST_DIR}"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TZDATA_SOURCE}" "${TZDATA_DEST_DIR}/tzdata"
-)
+if(EXISTS "${TZDATA_SOURCE}")
+    add_custom_command(
+        TARGET main
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${TZDATA_DEST_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TZDATA_SOURCE}" "${TZDATA_DEST_DIR}/tzdata"
+    )
+endif()
 
 find_library(ANDROIDAPPMUSIC_LIB androidappmusic PATHS ${CMAKE_SOURCE_DIR}/rootfs/system/lib64)
 find_library(STORESERVICESCORE_LIB storeservicescore PATHS ${CMAKE_SOURCE_DIR}/rootfs/system/lib64)
