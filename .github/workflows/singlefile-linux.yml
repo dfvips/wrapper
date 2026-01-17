@@ -42,9 +42,16 @@ jobs:
 
       - name: Add tzdata into rootfs (bionic timezone)
         run: |
-          TZDATA_PATH="/usr/share/zoneinfo/tzdata"
-          if [ ! -f "$TZDATA_PATH" ]; then
-            echo "tzdata not found at $TZDATA_PATH"
+          TZDATA_PATH="$(find "$HOME/android-ndk-r23b" -type f -path '*/usr/share/zoneinfo/tzdata' | head -n 1)"
+          if [ -z "$TZDATA_PATH" ] || [ ! -f "$TZDATA_PATH" ]; then
+            TZDATA_PATH="$(find "$HOME/android-ndk-r23b" -type f -name 'tzdata' | head -n 1)"
+          fi
+          if [ -z "$TZDATA_PATH" ] || [ ! -f "$TZDATA_PATH" ]; then
+            echo "tzdata not found in NDK"
+            exit 1
+          fi
+          if [ "$(head -c 6 "$TZDATA_PATH")" != "tzdata" ]; then
+            echo "tzdata file invalid: $TZDATA_PATH"
             exit 1
           fi
           cp "$TZDATA_PATH" tzdata

@@ -335,13 +335,6 @@ static void credentialHandler(struct shared_ptr *credReqHandler,
         _ZNK17storeservicescore18CredentialsRequest28requiresHSA2VerificationCodeEv(
             credReqHandler->obj);
     g_last_need_2fa = need2FA ? 1 : 0;
-    fprintf(
-        stderr, "[.] credentialHandler: {title: %s, message: %s, 2FA: %s}\n",
-        std_string_data(_ZNK17storeservicescore18CredentialsRequest5titleEv(
-            credReqHandler->obj)),
-        std_string_data(_ZNK17storeservicescore18CredentialsRequest7messageEv(
-            credReqHandler->obj)),
-        need2FA ? "true" : "false");
 
     size_t passLen = strlen(amPassword);
 
