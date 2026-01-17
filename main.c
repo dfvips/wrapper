@@ -33,6 +33,8 @@ char *device_infos[9];
 static int g_debug = 0;
 static char *g_cookie = NULL;
 
+char *strcat_b(char *dest, char* src);
+
 // Account info cache
 static char *g_storefront_id = NULL;
 static char *g_dev_token = NULL;
@@ -181,9 +183,15 @@ static void invalidate_cached_account_files(void) {
     if (storefront_path && file_exists(storefront_path)) {
         remove(storefront_path);
     }
+    if (storefront_path) {
+        free(storefront_path);
+    }
     char *music_token_path = strcat_b(args_info.base_dir_arg, "/MUSIC_TOKEN");
     if (music_token_path && file_exists(music_token_path)) {
         remove(music_token_path);
+    }
+    if (music_token_path) {
+        free(music_token_path);
     }
 }
 
