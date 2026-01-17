@@ -31,6 +31,27 @@ jobs:
           cmake ..
           make
 
+      - name: Inject Android tzdata into rootfs
+        run: |
+          set -eu
+          mkdir -p rootfs/system/usr/share/zoneinfo
+          mkdir -p rootfs/data/misc/zoneinfo/current
+          TMP_TZ="$(mktemp)"
+          for BRANCH in main master; do
+            URL="https://android.googlesource.com/platform/system/timezone/+/refs/heads/${BRANCH}/output_data/iana/tzdata?format=TEXT"
+            if curl -fsSL "$URL" | base64 -d > "$TMP_TZ"; then
+              if [ -s "$TMP_TZ" ] && head -c 6 "$TMP_TZ" | grep -q "tzdata"; then
+                cp "$TMP_TZ" rootfs/system/usr/share/zoneinfo/tzdata
+                cp "$TMP_TZ" rootfs/data/misc/zoneinfo/current/tzdata
+                rm -f "$TMP_TZ"
+                exit 0
+              fi
+            fi
+          done
+          rm -f "$TMP_TZ"
+          echo "failed to download Android tzdata"
+          exit 1
+
       - name: Set outputs
         id: vars
         run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
