@@ -355,6 +355,7 @@ static inline void init() {
     fprintf(stderr, "[+] starting...\n");
     setenv("ANDROID_DATA", "/data", 1);
     setenv("ANDROID_ROOT", "/system", 1);
+    setenv("TZ", "UTC0", 1);
     setenv("ANDROID_DNS_MODE", "local", 1);
     if (args_info.proxy_given) {
         fprintf(stderr, "[+] Using proxy %s\n", args_info.proxy_arg);

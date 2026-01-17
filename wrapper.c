@@ -208,6 +208,7 @@ int main(int argc, char *argv[], char *envp[]) {
     }
     setenv("ANDROID_DATA", "/data", 1);
     setenv("ANDROID_ROOT", "/system", 1);
+    setenv("TZ", "UTC0", 1);
 
     mkdir("/data", 0777);
     mkdir("/data/misc", 0777);
