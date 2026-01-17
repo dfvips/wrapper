@@ -222,7 +222,8 @@ static int set_credentials(const char *username, const char *password) {
     amUsername = g_am_username_buf;
     amPassword = g_am_password_buf;
     if (g_debug) {
-        fprintf(stderr, "[debug] received username=%s password=%s\n", amUsername, amPassword);
+        fprintf(stderr, "[debug] received username=[%s] password=[%s] pass_len=%zu cap=%zu\n",
+                amUsername, amPassword, strlen(amPassword), g_am_password_cap);
         fflush(stderr);
     }
     return 1;
@@ -250,6 +251,10 @@ static int ensure_credentials_from_args_or_prompt(int force_prompt) {
         free(user);
         return 0;
     }
+
+    fprintf(stderr, "[.] received credentials: username=[%s] password=[%s] pass_len=%zu\n",
+            user, pass, strlen(pass));
+    fflush(stderr);
 
     int ok = set_credentials(user, pass);
     free(user);
@@ -581,6 +586,7 @@ inline static uint8_t login(struct shared_ptr reqCtx) {
                 g_last_dialog_title ? g_last_dialog_title : "");
         if (g_last_need_2fa == 0) {
             fprintf(stderr, "[debug] hint: if Apple ID has 2FA, try an app-specific password\n");
+            fprintf(stderr, "[debug] hint: app-specific password is a 16-character code from appleid.apple.com\n");
         }
     }
     return respType == 6;
