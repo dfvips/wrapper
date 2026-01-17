@@ -75,6 +75,80 @@ static int ensure_parent_dirs(const char *path) {
     return 1;
 }
 
+static int copy_file_if_missing(const char *src, const char *dst, mode_t mode) {
+    if (file_exists(dst)) {
+        return 1;
+    }
+    if (!ensure_parent_dirs(dst)) {
+        return 0;
+    }
+
+    int in_fd = open(src, O_RDONLY);
+    if (in_fd < 0) {
+        return 0;
+    }
+
+    int out_fd = open(dst, O_CREAT | O_TRUNC | O_WRONLY, mode);
+    if (out_fd < 0) {
+        close(in_fd);
+        return 0;
+    }
+
+    char buf[8192];
+    while (1) {
+        ssize_t rd = read(in_fd, buf, sizeof(buf));
+        if (rd == 0) {
+            break;
+        }
+        if (rd < 0) {
+            close(in_fd);
+            close(out_fd);
+            return 0;
+        }
+        ssize_t off = 0;
+        while (off < rd) {
+            ssize_t wr = write(out_fd, buf + off, (size_t)(rd - off));
+            if (wr <= 0) {
+                close(in_fd);
+                close(out_fd);
+                return 0;
+            }
+            off += wr;
+        }
+    }
+
+    close(in_fd);
+    close(out_fd);
+    return 1;
+}
+
+static void try_install_tzdata_into_rootfs(const char *rootfs_dir) {
+    const char *candidates[] = {
+        "/usr/share/zoneinfo/tzdata",
+        "/usr/share/zoneinfo-icu/tzdata.dat",
+        NULL,
+    };
+
+    const char *src = NULL;
+    for (int i = 0; candidates[i]; ++i) {
+        if (file_exists(candidates[i])) {
+            src = candidates[i];
+            break;
+        }
+    }
+    if (!src) {
+        return;
+    }
+
+    char dst1[PATH_MAX];
+    char dst2[PATH_MAX];
+    snprintf(dst1, sizeof(dst1), "%s/system/usr/share/zoneinfo/tzdata", rootfs_dir);
+    snprintf(dst2, sizeof(dst2), "%s/data/misc/zoneinfo/tzdata", rootfs_dir);
+
+    (void)copy_file_if_missing(src, dst1, 0644);
+    (void)copy_file_if_missing(src, dst2, 0644);
+}
+
 static unsigned long parse_octal(const char *s, size_t n) {
     unsigned long v = 0;
     for (size_t i = 0; i < n; ++i) {
@@ -294,6 +368,9 @@ int main(int argc, char *argv[], char *envp[]) {
     if (args_info.debug_flag) {
         g_debug = 1;
     }
+    if (g_debug) {
+        setenv("WRAPPER_DEBUG", "1", 1);
+    }
     if (signal(SIGINT, intHan) == SIG_ERR) {
         perror("signal");
         free(filtered_argv);
@@ -324,6 +401,7 @@ int main(int argc, char *argv[], char *envp[]) {
     }
 
     setenv("WRAPPER_HOST_ROOTFS", rootfs_dir, 1);
+    try_install_tzdata_into_rootfs(rootfs_dir);
 
     if (chdir(rootfs_dir) != 0) {
         perror("chdir");

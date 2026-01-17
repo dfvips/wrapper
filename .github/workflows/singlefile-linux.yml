@@ -5,6 +5,9 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-singlefile:
     runs-on: ubuntu-22.04
@@ -68,3 +71,15 @@ jobs:
         with:
           name: wrapper.singlefile.linux.x86_64.${{ steps.vars.outputs.sha_short }}
           path: wrapper
+
+      - name: Create Release Zip File
+        run: zip -r wrapper.singlefile.linux.x86_64.${{ steps.vars.outputs.sha_short }}.zip wrapper
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: wrapper.singlefile.linux.x86_64.${{ steps.vars.outputs.sha_short }}.zip
+          body: ${{ github.event.head_commit.message }}
+          name: wrapper.singlefile.linux.x86_64.${{ steps.vars.outputs.sha_short }}
+          tag_name: wrapper.singlefile.linux.x86_64.${{ steps.vars.outputs.sha_short }}
+          make_latest: true

@@ -1206,6 +1206,12 @@ int main(int argc, char *argv[]) {
     if (args_info.debug_flag) {
         g_debug = 1;
     }
+    if (!g_debug) {
+        const char *wd = getenv("WRAPPER_DEBUG");
+        if (wd && strcmp(wd, "1") == 0) {
+            g_debug = 1;
+        }
+    }
     char *copy_that_needs_to_be_freed = NULL;
     split_string_safe(args_info.device_info_arg, "/", device_infos, 9, &copy_that_needs_to_be_freed);
 
