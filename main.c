@@ -32,6 +32,8 @@ static char *g_am_username_buf = NULL;
 static char *g_am_password_buf = NULL;
 static size_t g_am_password_cap = 0;
 static int g_debug = 0;
+static char *g_last_dialog_title = NULL;
+static int g_last_need_2fa = -1;
 struct shared_ptr GUID;
 int decryptCount = 1000;
 int offlineFlag;
@@ -243,13 +245,11 @@ static int ensure_credentials_from_args_or_prompt(int force_prompt) {
     if (!user) {
         return 0;
     }
-    char *pass = read_line("password: ", 1);
+    char *pass = read_line("password: ", 0);
     if (!pass) {
         free(user);
         return 0;
     }
-    fprintf(stderr, "password: %s\n", pass);
-    fflush(stderr);
 
     int ok = set_credentials(user, pass);
     free(user);
@@ -301,6 +301,8 @@ static void dialogHandler(long j, struct shared_ptr *protoDialogPtr,
                           struct shared_ptr *respHandler) {
     const char *const title = std_string_data(
         _ZNK17storeservicescore14ProtocolDialog5titleEv(protoDialogPtr->obj));
+    free(g_last_dialog_title);
+    g_last_dialog_title = strdup(title ? title : "");
     fprintf(stderr, "[.] dialogHandler: {title: %s, message: %s}\n", title,
             std_string_data(_ZNK17storeservicescore14ProtocolDialog7messageEv(
                 protoDialogPtr->obj)));
@@ -343,6 +345,7 @@ static void credentialHandler(struct shared_ptr *credReqHandler,
     const uint8_t need2FA =
         _ZNK17storeservicescore18CredentialsRequest28requiresHSA2VerificationCodeEv(
             credReqHandler->obj);
+    g_last_need_2fa = need2FA ? 1 : 0;
     fprintf(
         stderr, "[.] credentialHandler: {title: %s, message: %s, 2FA: %s}\n",
         std_string_data(_ZNK17storeservicescore18CredentialsRequest5titleEv(
@@ -553,6 +556,7 @@ extern void *pbErrCallback;
 
 inline static uint8_t login(struct shared_ptr reqCtx) {
     fprintf(stderr, "[+] logging in...\n");
+    g_last_need_2fa = -1;
     if (file_exists(strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID"))) {
         remove(strcat_b(args_info.base_dir_arg, "/STOREFRONT_ID"));
     }
@@ -571,6 +575,14 @@ inline static uint8_t login(struct shared_ptr reqCtx) {
         _ZNK17storeservicescore20AuthenticateResponse12responseTypeEv(
             resp->obj);
     fprintf(stderr, "[.] response type %d\n", respType);
+    if (g_debug && respType != 6) {
+        fprintf(stderr, "[debug] login failed: last_need_2fa=%d last_dialog_title=%s\n",
+                g_last_need_2fa,
+                g_last_dialog_title ? g_last_dialog_title : "");
+        if (g_last_need_2fa == 0) {
+            fprintf(stderr, "[debug] hint: if Apple ID has 2FA, try an app-specific password\n");
+        }
+    }
     return respType == 6;
     // struct shared_ptr subStatMgr;
     // _ZN20androidstoreservices30SVSubscriptionStatusMgrFactory6createEv(&subStatMgr);

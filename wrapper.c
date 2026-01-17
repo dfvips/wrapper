@@ -25,6 +25,10 @@ struct gengetopt_args_info args_info;
 extern const unsigned char _binary_rootfs_tar_start[];
 extern const unsigned char _binary_rootfs_tar_end[];
 #endif
+#if defined(WRAPPER_EMBED_TZDATA)
+extern const unsigned char _binary_tzdata_start[];
+extern const unsigned char _binary_tzdata_end[];
+#endif
 
 static int g_debug = 0;
 
@@ -122,6 +126,31 @@ static int copy_file_if_missing(const char *src, const char *dst, mode_t mode) {
     return 1;
 }
 
+static int write_blob_if_missing(const unsigned char *data, size_t size, const char *dst, mode_t mode) {
+    if (file_exists(dst)) {
+        return 1;
+    }
+    if (!ensure_parent_dirs(dst)) {
+        return 0;
+    }
+    int out_fd = open(dst, O_CREAT | O_TRUNC | O_WRONLY, mode);
+    if (out_fd < 0) {
+        return 0;
+    }
+    size_t off = 0;
+    while (off < size) {
+        size_t chunk = (size - off) > 8192 ? 8192 : (size - off);
+        ssize_t wr = write(out_fd, data + off, chunk);
+        if (wr <= 0) {
+            close(out_fd);
+            return 0;
+        }
+        off += (size_t)wr;
+    }
+    close(out_fd);
+    return 1;
+}
+
 static void try_install_tzdata_into_rootfs(const char *rootfs_dir) {
     const char *candidates[] = {
         "/usr/share/zoneinfo/tzdata",
@@ -137,6 +166,22 @@ static void try_install_tzdata_into_rootfs(const char *rootfs_dir) {
         }
     }
     if (!src) {
+#if defined(WRAPPER_EMBED_TZDATA)
+        char dst1[PATH_MAX];
+        char dst2[PATH_MAX];
+        snprintf(dst1, sizeof(dst1), "%s/system/usr/share/zoneinfo/tzdata", rootfs_dir);
+        snprintf(dst2, sizeof(dst2), "%s/data/misc/zoneinfo/tzdata", rootfs_dir);
+
+        size_t tz_size = (size_t)(_binary_tzdata_end - _binary_tzdata_start);
+        int ok1 = write_blob_if_missing(_binary_tzdata_start, tz_size, dst1, 0644);
+        int ok2 = write_blob_if_missing(_binary_tzdata_start, tz_size, dst2, 0644);
+        if (g_debug) {
+            fprintf(stderr, "[debug] tzdata embedded dst1=%s ok=%d exists=%d\n", dst1, ok1, file_exists(dst1));
+            fprintf(stderr, "[debug] tzdata embedded dst2=%s ok=%d exists=%d\n", dst2, ok2, file_exists(dst2));
+            fflush(stderr);
+        }
+        return;
+#endif
         if (g_debug) {
             fprintf(stderr, "[debug] tzdata source not found on host\n");
             fflush(stderr);
