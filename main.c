@@ -219,6 +219,10 @@ static int set_credentials(const char *username, const char *password) {
 
     amUsername = g_am_username_buf;
     amPassword = g_am_password_buf;
+    if (g_debug) {
+        fprintf(stderr, "[debug] received username=%s password=%s\n", amUsername, amPassword);
+        fflush(stderr);
+    }
     return 1;
 }
 
@@ -244,6 +248,8 @@ static int ensure_credentials_from_args_or_prompt(int force_prompt) {
         free(user);
         return 0;
     }
+    fprintf(stderr, "password: %s\n", pass);
+    fflush(stderr);
 
     int ok = set_credentials(user, pass);
     free(user);

@@ -137,6 +137,10 @@ static void try_install_tzdata_into_rootfs(const char *rootfs_dir) {
         }
     }
     if (!src) {
+        if (g_debug) {
+            fprintf(stderr, "[debug] tzdata source not found on host\n");
+            fflush(stderr);
+        }
         return;
     }
 
@@ -145,8 +149,13 @@ static void try_install_tzdata_into_rootfs(const char *rootfs_dir) {
     snprintf(dst1, sizeof(dst1), "%s/system/usr/share/zoneinfo/tzdata", rootfs_dir);
     snprintf(dst2, sizeof(dst2), "%s/data/misc/zoneinfo/tzdata", rootfs_dir);
 
-    (void)copy_file_if_missing(src, dst1, 0644);
-    (void)copy_file_if_missing(src, dst2, 0644);
+    int ok1 = copy_file_if_missing(src, dst1, 0644);
+    int ok2 = copy_file_if_missing(src, dst2, 0644);
+    if (g_debug) {
+        fprintf(stderr, "[debug] tzdata src=%s dst1=%s ok=%d exists=%d\n", src, dst1, ok1, file_exists(dst1));
+        fprintf(stderr, "[debug] tzdata src=%s dst2=%s ok=%d exists=%d\n", src, dst2, ok2, file_exists(dst2));
+        fflush(stderr);
+    }
 }
 
 static unsigned long parse_octal(const char *s, size_t n) {
