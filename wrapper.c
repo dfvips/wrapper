@@ -79,6 +79,24 @@ static int ensure_parent_dirs(const char *path) {
     return 1;
 }
 
+static int join_path(char *dst, size_t dst_size, const char *prefix, const char *suffix) {
+    if (!dst || dst_size == 0 || !prefix || !suffix) {
+        return 0;
+    }
+    size_t prefix_len = strnlen(prefix, dst_size);
+    size_t suffix_len = strlen(suffix);
+    if (prefix_len >= dst_size) {
+        return 0;
+    }
+    if (prefix_len + suffix_len + 1 > dst_size) {
+        return 0;
+    }
+    memcpy(dst, prefix, prefix_len);
+    memcpy(dst + prefix_len, suffix, suffix_len);
+    dst[prefix_len + suffix_len] = '\0';
+    return 1;
+}
+
 static int copy_file_if_missing(const char *src, const char *dst, mode_t mode) {
     if (file_exists(dst)) {
         return 1;
@@ -169,8 +187,14 @@ static void try_install_tzdata_into_rootfs(const char *rootfs_dir) {
 #if defined(WRAPPER_EMBED_TZDATA)
         char dst1[PATH_MAX];
         char dst2[PATH_MAX];
-        snprintf(dst1, sizeof(dst1), "%s/system/usr/share/zoneinfo/tzdata", rootfs_dir);
-        snprintf(dst2, sizeof(dst2), "%s/data/misc/zoneinfo/tzdata", rootfs_dir);
+        if (!join_path(dst1, sizeof(dst1), rootfs_dir, "/system/usr/share/zoneinfo/tzdata") ||
+            !join_path(dst2, sizeof(dst2), rootfs_dir, "/data/misc/zoneinfo/tzdata")) {
+            if (g_debug) {
+                fprintf(stderr, "[debug] tzdata: rootfs_dir too long\n");
+                fflush(stderr);
+            }
+            return;
+        }
 
         size_t tz_size = (size_t)(_binary_tzdata_end - _binary_tzdata_start);
         int ok1 = write_blob_if_missing(_binary_tzdata_start, tz_size, dst1, 0644);
@@ -191,8 +215,14 @@ static void try_install_tzdata_into_rootfs(const char *rootfs_dir) {
 
     char dst1[PATH_MAX];
     char dst2[PATH_MAX];
-    snprintf(dst1, sizeof(dst1), "%s/system/usr/share/zoneinfo/tzdata", rootfs_dir);
-    snprintf(dst2, sizeof(dst2), "%s/data/misc/zoneinfo/tzdata", rootfs_dir);
+    if (!join_path(dst1, sizeof(dst1), rootfs_dir, "/system/usr/share/zoneinfo/tzdata") ||
+        !join_path(dst2, sizeof(dst2), rootfs_dir, "/data/misc/zoneinfo/tzdata")) {
+        if (g_debug) {
+            fprintf(stderr, "[debug] tzdata: rootfs_dir too long\n");
+            fflush(stderr);
+        }
+        return;
+    }
 
     int ok1 = copy_file_if_missing(src, dst1, 0644);
     int ok2 = copy_file_if_missing(src, dst2, 0644);
