@@ -17,6 +17,8 @@
 
 #include "cmdline.h"
 
+extern char **environ;
+
 pid_t child_proc = -1;
 struct gengetopt_args_info args_info;
 #if defined(WRAPPER_EMBED_ROOTFS)
@@ -366,7 +368,8 @@ int main(int argc, char *argv[], char *envp[]) {
     setenv("ANDROID_DATA", "/data", 1);
     setenv("ANDROID_ROOT", "/system", 1);
 
-    execve("/system/bin/main", argv, envp);
+    (void)envp;
+    execve("/system/bin/main", argv, environ);
     perror("execve");
     free(filtered_argv);
     return 1;
