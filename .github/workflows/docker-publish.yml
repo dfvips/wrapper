@@ -22,7 +22,7 @@ on:
       platforms:
         description: Target platforms (macOS/Windows use Linux containers)
         required: false
-        default: linux/amd64,linux/arm64
+        default: linux/arm64,linux/amd64
         type: string
 permissions:
   contents: read
@@ -62,7 +62,7 @@ jobs:
           fi
           PLATFORMS_INPUT="${{ inputs.platforms }}"
           if [ -z "$PLATFORMS_INPUT" ]; then
-            PLATFORMS_INPUT="linux/amd64,linux/arm64"
+            PLATFORMS_INPUT="linux/arm64,linux/amd64"
           fi
           PUSH_LATEST_INPUT="${{ inputs.push_latest }}"
           if [ -z "$PUSH_LATEST_INPUT" ]; then
