@@ -1,0 +1,89 @@
+---
+name: Docker Publish
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Build workflow run_id to download artifact from
+        required: true
+        type: string
+      image:
+        description: Docker image name (Linux container)
+        required: false
+        default: wrapper
+        type: string
+      tag:
+        description: Override image tag
+        required: false
+        type: string
+      push_latest:
+        description: Also push :latest
+        required: false
+        default: true
+        type: boolean
+      platforms:
+        description: Target platforms (macOS/Windows use Linux containers)
+        required: false
+        default: linux/amd64,linux/arm64
+        type: string
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download build artifacts
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          github_token: ${{ secrets.ACTION_TOKEN }}
+          run_id: ${{ inputs.run_id }}
+      - name: Prepare Docker build context
+        id: prep
+        run: |
+          set -e
+          ART_DIR="$(ls -d Wrapper.x86_64.* | head -n 1)"
+          test -d "$ART_DIR"
+          if [ -d "$ART_DIR/rootfs" ]; then
+            rm -rf rootfs
+            mv "$ART_DIR/rootfs" ./rootfs
+          fi
+          if [ -f "$ART_DIR/wrapper" ]; then
+            rm -f wrapper
+            mv "$ART_DIR/wrapper" ./wrapper
+            chmod +x ./wrapper
+          fi
+          if [ -f "$ART_DIR/Dockerfile" ]; then
+            mv "$ART_DIR/Dockerfile" ./Dockerfile
+          fi
+          if [ -z "${{ inputs.tag }}" ]; then
+            SHA_TAG="$(echo "$ART_DIR" | sed -E 's/.*\.([0-9a-f]+)$/\1/')"
+          else
+            SHA_TAG="${{ inputs.tag }}"
+          fi
+          echo "sha_tag=$SHA_TAG" >> $GITHUB_OUTPUT
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Compute tags
+        id: tags
+        run: |
+          T="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image }}:${{ steps.prep.outputs.sha_tag }}"
+          if [ "${{ inputs.push_latest }}" = "true" ]; then
+            T="$T,docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image }}:latest"
+          fi
+          echo "value=$T" >> $GITHUB_OUTPUT
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: ${{ steps.tags.outputs.value }}
