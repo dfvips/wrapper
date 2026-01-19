@@ -52,11 +52,34 @@ jobs:
         id: prep
         run: |
           set -e
+          IMAGE_INPUT="${{ inputs.image }}"
+          if [ -z "$IMAGE_INPUT" ]; then
+            IMAGE_INPUT="${{ github.event.repository.name }}"
+          fi
+          USERNAME="${{ secrets.DOCKERHUB_USERNAME }}"
+          if [ -z "$USERNAME" ]; then
+            USERNAME="${{ github.repository_owner }}"
+          fi
+          PLATFORMS_INPUT="${{ inputs.platforms }}"
+          if [ -z "$PLATFORMS_INPUT" ]; then
+            PLATFORMS_INPUT="linux/amd64,linux/arm64"
+          fi
+          PUSH_LATEST_INPUT="${{ inputs.push_latest }}"
+          if [ -z "$PUSH_LATEST_INPUT" ]; then
+            PUSH_LATEST_INPUT="true"
+          fi
           if [ -z "${{ inputs.tag }}" ]; then
             SHA_TAG="${{ steps.vars.outputs.sha_short }}"
           else
             SHA_TAG="${{ inputs.tag }}"
           fi
+          if [ -z "$IMAGE_INPUT" ] || [ -z "$USERNAME" ] || [ -z "$SHA_TAG" ]; then
+            exit 1
+          fi
+          echo "image=$IMAGE_INPUT" >> $GITHUB_OUTPUT
+          echo "username=$USERNAME" >> $GITHUB_OUTPUT
+          echo "platforms=$PLATFORMS_INPUT" >> $GITHUB_OUTPUT
+          echo "push_latest=$PUSH_LATEST_INPUT" >> $GITHUB_OUTPUT
           echo "sha_tag=$SHA_TAG" >> $GITHUB_OUTPUT
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -70,9 +93,9 @@ jobs:
       - name: Compute tags
         id: tags
         run: |
-          T="docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image }}:${{ steps.prep.outputs.sha_tag }}"
-          if [ "${{ inputs.push_latest }}" = "true" ]; then
-            T="$T,docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image }}:latest"
+          T="docker.io/${{ steps.prep.outputs.username }}/${{ steps.prep.outputs.image }}:${{ steps.prep.outputs.sha_tag }}"
+          if [ "${{ steps.prep.outputs.push_latest }}" = "true" ]; then
+            T="$T,docker.io/${{ steps.prep.outputs.username }}/${{ steps.prep.outputs.image }}:latest"
           fi
           echo "value=$T" >> $GITHUB_OUTPUT
       - name: Build and push
@@ -80,6 +103,6 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          platforms: ${{ inputs.platforms }}
+          platforms: ${{ steps.prep.outputs.platforms }}
           push: true
           tags: ${{ steps.tags.outputs.value }}
