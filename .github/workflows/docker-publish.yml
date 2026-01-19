@@ -41,7 +41,7 @@ jobs:
       - name: Download build artifacts
         uses: dawidd6/action-download-artifact@v6
         with:
-          github_token: ${{ secrets.ACTION_TOKEN }}
+          github_token: ${{ github.token }}
           run_id: ${{ inputs.run_id || github.event.workflow_run.id }}
       - name: Prepare Docker build context
         id: prep
